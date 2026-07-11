@@ -61,20 +61,12 @@ func (a *App) Create(ctx context.Context, opts CreateOpts) error {
 	// A brand-new issue has no dependents, so --blocked-by can't create a
 	// cycle; no transitive check needed on this path.
 	for _, blocker := range opts.BlockedBy {
-		blockerIssue, err := a.Client.GetIssue(ctx, blocker)
-		if err != nil {
-			return fmt.Errorf("created #%d but --blocked-by %d failed: %w", created.Number, blocker, err)
-		}
-		if err := a.Client.AddBlockedBy(ctx, created.ID, blockerIssue.ID); err != nil {
+		if err := a.Client.AddBlockedBy(ctx, created.Number, blocker); err != nil {
 			return fmt.Errorf("created #%d but --blocked-by %d failed: %w", created.Number, blocker, err)
 		}
 	}
 	if opts.Parent > 0 {
-		parent, err := a.Client.GetIssue(ctx, opts.Parent)
-		if err != nil {
-			return fmt.Errorf("created #%d but --parent %d failed: %w", created.Number, opts.Parent, err)
-		}
-		if err := a.Client.AddSubIssue(ctx, parent.ID, created.ID, false); err != nil {
+		if err := a.Client.AddSubIssue(ctx, opts.Parent, created.Number, false); err != nil {
 			return fmt.Errorf("created #%d but --parent %d failed: %w", created.Number, opts.Parent, err)
 		}
 	}
@@ -261,12 +253,8 @@ func (a *App) Set(ctx context.Context, number int, opts SetOpts) error {
 		}
 	}
 	if opts.Parent > 0 {
-		parent, err := a.Client.GetIssue(ctx, opts.Parent)
-		if err != nil {
-			return step("parent", err)
-		}
 		// AddSubIssue with replace moves the issue when it already has one.
-		if err := step("parent", a.Client.AddSubIssue(ctx, parent.ID, issue.ID, true)); err != nil {
+		if err := step("parent", a.Client.AddSubIssue(ctx, opts.Parent, number, true)); err != nil {
 			return err
 		}
 	}
@@ -274,11 +262,7 @@ func (a *App) Set(ctx context.Context, number int, opts SetOpts) error {
 		if issue.Parent == nil {
 			a.warnf("#%d has no parent; --no-parent is a no-op", number)
 		} else {
-			parent, err := a.Client.GetIssue(ctx, issue.Parent.Number)
-			if err != nil {
-				return step("no-parent", err)
-			}
-			if err := step("no-parent", a.Client.RemoveSubIssue(ctx, parent.ID, issue.ID)); err != nil {
+			if err := step("no-parent", a.Client.RemoveSubIssue(ctx, issue.Parent.Number, number)); err != nil {
 				return err
 			}
 		}
@@ -308,12 +292,12 @@ func (a *App) Close(ctx context.Context, number int, reason string, completed bo
 	if completed && duplicateOf > 0 {
 		return usageErr("--completed and --duplicate-of are mutually exclusive")
 	}
-	stateReason := "NOT_PLANNED"
+	stateReason := gh.CloseNotPlanned
 	switch {
 	case completed:
-		stateReason = "COMPLETED"
+		stateReason = gh.CloseCompleted
 	case duplicateOf > 0:
-		stateReason = "DUPLICATE"
+		stateReason = gh.CloseDuplicate
 		if reason == "" {
 			reason = fmt.Sprintf("Duplicate of #%d", duplicateOf)
 		}
@@ -331,12 +315,12 @@ func (a *App) Close(ctx context.Context, number int, reason string, completed bo
 	if err := a.Client.Comment(ctx, number, reason); err != nil {
 		return err
 	}
-	if err := a.Client.CloseIssue(ctx, issue.ID, stateReason); err != nil {
+	if err := a.Client.CloseIssue(ctx, number, stateReason); err != nil {
 		// The reason comment already posted; flag it so a retry isn't read as
 		// a clean redo — re-running would post the comment a second time.
 		return fmt.Errorf("posted the reason comment on #%d but closing it failed (a retry will comment again): %w", number, err)
 	}
-	return a.reportMutation(ctx, number, "closed #%d (%s)\n", number, strings.ToLower(strings.ReplaceAll(stateReason, "_", " ")))
+	return a.reportMutation(ctx, number, "closed #%d (%s)\n", number, strings.ToLower(strings.ReplaceAll(string(stateReason), "_", " ")))
 }
 
 // Block adds a native dependency after a transitive client-side cycle
@@ -352,8 +336,7 @@ func (a *App) Block(ctx context.Context, number, blocker int) error {
 	if !ok {
 		return genericErr("#%d is not an open issue in %s", number, a.Repo)
 	}
-	blockerIssue, ok := byNum[blocker]
-	if !ok {
+	if _, ok := byNum[blocker]; !ok {
 		return genericErr("#%d is not an open issue in %s; closed blockers don't block", blocker, a.Repo)
 	}
 	if slices.Contains(issue.OpenBlockers(), blocker) {
@@ -367,7 +350,7 @@ func (a *App) Block(ctx context.Context, number, blocker int) error {
 	if !check.Verifiable {
 		return genericErr("refusing: cannot verify #%d → #%d is cycle-free because some issues have more blockers than were fetched; reduce blockers on the issues involved and retry", number, blocker)
 	}
-	if err := a.Client.AddBlockedBy(ctx, issue.ID, blockerIssue.ID); err != nil {
+	if err := a.Client.AddBlockedBy(ctx, number, blocker); err != nil {
 		return err
 	}
 	return a.reportMutation(ctx, number, "blocked #%d on #%d\n", number, blocker)
@@ -389,11 +372,7 @@ func (a *App) Unblock(ctx context.Context, number, blocker int) error {
 		a.printf("#%d is not blocked by #%d\n", number, blocker)
 		return nil
 	}
-	blockerIssue, err := a.Client.GetIssue(ctx, blocker)
-	if err != nil {
-		return err
-	}
-	if err := a.Client.RemoveBlockedBy(ctx, issue.ID, blockerIssue.ID); err != nil {
+	if err := a.Client.RemoveBlockedBy(ctx, number, blocker); err != nil {
 		return err
 	}
 	return a.reportMutation(ctx, number, "unblocked #%d from #%d\n", number, blocker)
@@ -414,11 +393,7 @@ func (a *App) EpicCreate(ctx context.Context, title string, children []int) erro
 		return err
 	}
 	for _, child := range children {
-		childIssue, err := a.Client.GetIssue(ctx, child)
-		if err != nil {
-			return fmt.Errorf("created epic #%d but attaching #%d failed: %w", created.Number, child, err)
-		}
-		if err := a.Client.AddSubIssue(ctx, created.ID, childIssue.ID, false); err != nil {
+		if err := a.Client.AddSubIssue(ctx, created.Number, child, false); err != nil {
 			return fmt.Errorf("created epic #%d but attaching #%d failed: %w", created.Number, child, err)
 		}
 	}

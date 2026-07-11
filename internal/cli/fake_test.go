@@ -59,14 +59,15 @@ func (f *fakeClient) byNumber(n int) *model.Issue {
 	return nil
 }
 
-func (f *fakeClient) byID(id string) *model.Issue {
-	for _, i := range f.issues {
-		if i.ID == id {
-			return i
-		}
+// requireIssue mirrors the real client, where a mutation on a missing issue
+// fails at node-ID resolution rather than panicking.
+func (f *fakeClient) requireIssue(n int) (*model.Issue, error) {
+	if i := f.byNumber(n); i != nil {
+		return i, nil
 	}
-	return nil
+	return nil, fmt.Errorf("issue #%d not found in o/r", n)
 }
+
 
 // refreshRefs recomputes Ref states and epic rollups after any mutation.
 func (f *fakeClient) refreshRefs() {
@@ -108,14 +109,18 @@ func (f *fakeClient) Viewer(ctx context.Context) (string, error) {
 	return f.viewer, nil
 }
 
-func (f *fakeClient) ListIssues(ctx context.Context, states []string) ([]model.Issue, error) {
-	if err := f.record("ListIssues " + strings.Join(states, ",")); err != nil {
+func (f *fakeClient) ListIssues(ctx context.Context, states []gh.IssueState) ([]model.Issue, error) {
+	labels := make([]string, len(states))
+	for i, s := range states {
+		labels[i] = string(s)
+	}
+	if err := f.record("ListIssues " + strings.Join(labels, ",")); err != nil {
 		return nil, err
 	}
 	f.refreshRefs()
 	var out []model.Issue
 	for _, i := range f.issues {
-		if slices.Contains(states, i.State) {
+		if slices.Contains(states, gh.IssueState(i.State)) {
 			out = append(out, *i)
 		}
 	}
@@ -209,39 +214,63 @@ func (f *fakeClient) Comment(ctx context.Context, number int, body string) error
 	return nil
 }
 
-func (f *fakeClient) CloseIssue(ctx context.Context, issueID, reason string) error {
-	if err := f.record(fmt.Sprintf("CloseIssue %s %s", issueID, reason)); err != nil {
+func (f *fakeClient) CloseIssue(ctx context.Context, number int, reason gh.CloseReason) error {
+	if err := f.record(fmt.Sprintf("CloseIssue %d %s", number, reason)); err != nil {
 		return err
 	}
-	i := f.byID(issueID)
+	i, err := f.requireIssue(number)
+	if err != nil {
+		return err
+	}
 	i.State = "CLOSED"
-	i.StateReason = reason
+	i.StateReason = string(reason)
 	return nil
 }
 
-func (f *fakeClient) AddBlockedBy(ctx context.Context, issueID, blockingIssueID string) error {
-	if err := f.record(fmt.Sprintf("AddBlockedBy %s %s", issueID, blockingIssueID)); err != nil {
+func (f *fakeClient) AddBlockedBy(ctx context.Context, number, blockingNumber int) error {
+	if err := f.record(fmt.Sprintf("AddBlockedBy %d %d", number, blockingNumber)); err != nil {
 		return err
 	}
-	i, b := f.byID(issueID), f.byID(blockingIssueID)
+	i, err := f.requireIssue(number)
+	if err != nil {
+		return err
+	}
+	b, err := f.requireIssue(blockingNumber)
+	if err != nil {
+		return err
+	}
 	i.BlockedBy = append(i.BlockedBy, model.Ref{Number: b.Number, State: b.State})
 	return nil
 }
 
-func (f *fakeClient) RemoveBlockedBy(ctx context.Context, issueID, blockingIssueID string) error {
-	if err := f.record(fmt.Sprintf("RemoveBlockedBy %s %s", issueID, blockingIssueID)); err != nil {
+func (f *fakeClient) RemoveBlockedBy(ctx context.Context, number, blockingNumber int) error {
+	if err := f.record(fmt.Sprintf("RemoveBlockedBy %d %d", number, blockingNumber)); err != nil {
 		return err
 	}
-	i, b := f.byID(issueID), f.byID(blockingIssueID)
+	i, err := f.requireIssue(number)
+	if err != nil {
+		return err
+	}
+	b, err := f.requireIssue(blockingNumber)
+	if err != nil {
+		return err
+	}
 	i.BlockedBy = slices.DeleteFunc(slices.Clone(i.BlockedBy), func(r model.Ref) bool { return r.Number == b.Number })
 	return nil
 }
 
-func (f *fakeClient) AddSubIssue(ctx context.Context, parentID, childID string, replaceParent bool) error {
-	if err := f.record(fmt.Sprintf("AddSubIssue %s %s replace=%v", parentID, childID, replaceParent)); err != nil {
+func (f *fakeClient) AddSubIssue(ctx context.Context, parentNumber, childNumber int, replaceParent bool) error {
+	if err := f.record(fmt.Sprintf("AddSubIssue %d %d replace=%v", parentNumber, childNumber, replaceParent)); err != nil {
 		return err
 	}
-	parent, child := f.byID(parentID), f.byID(childID)
+	parent, err := f.requireIssue(parentNumber)
+	if err != nil {
+		return err
+	}
+	child, err := f.requireIssue(childNumber)
+	if err != nil {
+		return err
+	}
 	if child.Parent != nil {
 		if !replaceParent {
 			return fmt.Errorf("#%d already has a parent", child.Number)
@@ -254,11 +283,18 @@ func (f *fakeClient) AddSubIssue(ctx context.Context, parentID, childID string, 
 	return nil
 }
 
-func (f *fakeClient) RemoveSubIssue(ctx context.Context, parentID, childID string) error {
-	if err := f.record(fmt.Sprintf("RemoveSubIssue %s %s", parentID, childID)); err != nil {
+func (f *fakeClient) RemoveSubIssue(ctx context.Context, parentNumber, childNumber int) error {
+	if err := f.record(fmt.Sprintf("RemoveSubIssue %d %d", parentNumber, childNumber)); err != nil {
 		return err
 	}
-	parent, child := f.byID(parentID), f.byID(childID)
+	parent, err := f.requireIssue(parentNumber)
+	if err != nil {
+		return err
+	}
+	child, err := f.requireIssue(childNumber)
+	if err != nil {
+		return err
+	}
 	child.Parent = nil
 	parent.SubIssues = slices.DeleteFunc(slices.Clone(parent.SubIssues), func(r model.Ref) bool { return r.Number == child.Number })
 	return nil

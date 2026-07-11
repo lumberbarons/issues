@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/lumberbarons/issues/internal/conventions"
+	"github.com/lumberbarons/issues/internal/gh"
 	"github.com/lumberbarons/issues/internal/model"
 	"github.com/lumberbarons/issues/internal/render"
 )
@@ -14,8 +15,8 @@ import (
 const primeReadyCap = 10
 
 var (
-	openStates = []string{"OPEN"}
-	allStates  = []string{"OPEN", "CLOSED"}
+	openStates = []gh.IssueState{gh.StateOpen}
+	allStates  = []gh.IssueState{gh.StateOpen, gh.StateClosed}
 )
 
 // Ready lists open, non-epic, unclaimed issues with zero open blockers.
@@ -45,7 +46,7 @@ type ListOpts struct {
 func (a *App) List(ctx context.Context, opts ListOpts) error {
 	states := openStates
 	if opts.Closed {
-		states = []string{"CLOSED"}
+		states = []gh.IssueState{gh.StateClosed}
 	}
 	if opts.Epic > 0 {
 		// Children of an epic are interesting in both states: progress
