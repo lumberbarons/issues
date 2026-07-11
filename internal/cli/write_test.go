@@ -518,6 +518,52 @@ func TestEpicCreateKeepsExistingPrefix(t *testing.T) {
 	exitCode(t, app.EpicCreate(ctx, "", nil), ExitUsage)
 }
 
+func TestSetValidatesBeforeMutating(t *testing.T) {
+	f := newFake(issue(1, "Work", "P2", "bug"))
+	app, _, _ := newApp(f)
+	// Valid --priority but invalid --type: must exit usage without having
+	// swapped the priority label first.
+	exitCode(t, app.Set(ctx, 1, SetOpts{Priority: "P0", Type: "bogus"}), ExitUsage)
+	labels := f.byNumber(1).Labels
+	if !slices.Contains(labels, "P2") || slices.Contains(labels, "P0") {
+		t.Errorf("priority mutated before type validation failed: %v", labels)
+	}
+}
+
+func TestSetReportsPartialApplication(t *testing.T) {
+	f := newFake(issue(1, "Work", "P2", "bug"))
+	f.failOn["EditTitle"] = errors.New("boom")
+	app, _, _ := newApp(f)
+	err := app.Set(ctx, 1, SetOpts{Priority: "P0", Title: "Renamed"})
+	if err == nil || !strings.Contains(err.Error(), "partially updated (applied priority)") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestCloseReportsCommentedWhenCloseFails(t *testing.T) {
+	f := newFake(issue(1, "A", "P2", "bug"))
+	f.failOn["CloseIssue"] = errors.New("boom")
+	app, _, _ := newApp(f)
+	err := app.Close(ctx, 1, "wontfix", false, 0)
+	if err == nil || !strings.Contains(err.Error(), "posted the reason comment") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestReportMutationWrapsRefetchFailure(t *testing.T) {
+	f := newFake(issue(1, "A", "P2", "bug"), issue(2, "B", "P2", "bug"))
+	f.failOn["GetIssue"] = errors.New("boom") // only the JSON re-fetch calls it here
+	app, _, _ := newApp(f)
+	app.JSON = true
+	err := app.Block(ctx, 1, 2)
+	if err == nil || !strings.Contains(err.Error(), "was updated, but fetching the result") {
+		t.Errorf("err = %v", err)
+	}
+	if len(f.byNumber(1).BlockedBy) != 1 {
+		t.Error("mutation not applied before the re-fetch failed")
+	}
+}
+
 func TestSetFailurePropagates(t *testing.T) {
 	f := newFake(issue(1, "Work", "P2", "bug"))
 	f.failOn["RemoveLabel"] = errors.New("boom")
