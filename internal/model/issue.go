@@ -57,6 +57,18 @@ func IsType(label string) bool {
 // is the visibility.
 const InProgressLabel = "in-progress"
 
+// LabelVocabulary returns every label name the tool assigns meaning to, in a
+// stable order: priorities, then types, then the in-progress label. It is the
+// single source of truth for label names — conventions attaches the cosmetics
+// (color, description) keyed by these names.
+func LabelVocabulary() []string {
+	out := make([]string, 0, len(priorityNames)+len(Types)+1)
+	out = append(out, priorityNames[:]...)
+	out = append(out, Types...)
+	out = append(out, InProgressLabel)
+	return out
+}
+
 // stateOpen is GitHub's issue state enum for an open issue, as it appears
 // on the wire.
 const stateOpen = "OPEN"
