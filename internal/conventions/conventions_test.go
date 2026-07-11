@@ -1,0 +1,107 @@
+package conventions
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/lumberbarons/issues/internal/model"
+)
+
+func TestLabelsCoverConventionSet(t *testing.T) {
+	byName := map[string]Label{}
+	for _, l := range Labels {
+		byName[l.Name] = l
+		if l.Color == "" || l.Description == "" {
+			t.Errorf("label %q missing color or description", l.Name)
+		}
+		if strings.HasPrefix(l.Color, "#") {
+			t.Errorf("label %q color has leading #", l.Name)
+		}
+	}
+	for _, want := range []string{"P0", "P1", "P2", "P3", "P4", "bug", "enhancement", "task", model.InProgressLabel} {
+		if _, ok := byName[want]; !ok {
+			t.Errorf("label set missing %q", want)
+		}
+	}
+	for _, l := range Labels {
+		if _, ok := model.ParsePriority(l.Name); ok {
+			continue
+		}
+		if model.IsType(l.Name) || l.Name == model.InProgressLabel {
+			continue
+		}
+		t.Errorf("label %q is not part of the priority/type/in-progress conventions", l.Name)
+	}
+}
+
+func TestTemplateSections(t *testing.T) {
+	bug := TemplateSections("bug")
+	if bug[1] != "### Problem" || bug[2] != "### Fix" {
+		t.Errorf("bug sections = %v", bug)
+	}
+	for _, typ := range []string{"enhancement", "task"} {
+		s := TemplateSections(typ)
+		if s[1] != "### Goal" || s[2] != "### Approach" {
+			t.Errorf("%s sections = %v", typ, s)
+		}
+	}
+}
+
+func TestTemplateSkeleton(t *testing.T) {
+	s := TemplateSkeleton("bug")
+	for _, h := range []string{"### Where", "### Problem", "### Fix", "### Done when", "- [ ]"} {
+		if !strings.Contains(s, h) {
+			t.Errorf("skeleton missing %q:\n%s", h, s)
+		}
+	}
+}
+
+func TestStripEmptySections(t *testing.T) {
+	in := "### Where\n\ninternal/model\n\n### Problem\n\n\n### Fix\n\nDo the thing\n\n### Done when\n\n- [ ] \n"
+	got := StripEmptySections(in)
+	if strings.Contains(got, "Problem") || strings.Contains(got, "Done when") {
+		t.Errorf("empty sections not stripped:\n%s", got)
+	}
+	for _, keep := range []string{"### Where", "internal/model", "### Fix", "Do the thing"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("filled content lost %q:\n%s", keep, got)
+		}
+	}
+}
+
+func TestStripEmptySectionsChecklist(t *testing.T) {
+	in := "### Done when\n\n- [ ] tests pass\n"
+	got := StripEmptySections(in)
+	if !strings.Contains(got, "- [ ] tests pass") {
+		t.Errorf("filled checklist stripped:\n%s", got)
+	}
+}
+
+func TestStripEmptySectionsPreservesNonTemplate(t *testing.T) {
+	in := "Free-form intro.\n\n### Where\n\n\nTrailing? No: header then blank."
+	got := StripEmptySections("Free-form intro.\n\nDiscovered while working on #9")
+	if got != "Free-form intro.\n\nDiscovered while working on #9" {
+		t.Errorf("non-template body altered: %q", got)
+	}
+	_ = in
+}
+
+func TestDiscoveredFrom(t *testing.T) {
+	if got := DiscoveredFrom(123); got != "Discovered while working on #123" {
+		t.Errorf("DiscoveredFrom = %q", got)
+	}
+}
+
+func TestPrimerStaticMentionsCoreCommands(t *testing.T) {
+	for _, cmd := range []string{"issues ready", "start", "triage", "--discovered-from", "Fixes #n", "P0", "P4", "exit 3"} {
+		if !strings.Contains(PrimerStatic, cmd) {
+			t.Errorf("primer missing %q", cmd)
+		}
+	}
+}
+
+func TestClaudeSnippet(t *testing.T) {
+	if !strings.Contains(ClaudeSnippet, "issues prime") {
+		t.Error("snippet must point at issues prime")
+	}
+}

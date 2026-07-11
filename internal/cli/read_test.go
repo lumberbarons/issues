@@ -1,0 +1,345 @@
+package cli
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/lumberbarons/issues/internal/model"
+)
+
+var ctx = context.Background()
+
+func TestReadyListsSorted(t *testing.T) {
+	f := newFake(
+		issue(1, "Normal work", "P2", "bug"),
+		issue(2, "Urgent", "P0", "task"),
+		issue(3, "Claimed", "P1", "bug", "in-progress"),
+	)
+	app, out, _ := newApp(f)
+	if err := app.Ready(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "#2") || !strings.HasPrefix(lines[1], "#1") {
+		t.Errorf("Ready output:\n%s", out.String())
+	}
+}
+
+func TestReadyNoWork(t *testing.T) {
+	f := newFake(issue(3, "Claimed", "P1", "bug", "in-progress"))
+	app, out, _ := newApp(f)
+	if err := app.Ready(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "no ready work\n" {
+		t.Errorf("output = %q", out.String())
+	}
+}
+
+func TestReadyWarnsOnCycle(t *testing.T) {
+	a := issue(1, "A", "P2", "bug")
+	a.BlockedBy = []model.Ref{{Number: 2, State: "OPEN"}}
+	b := issue(2, "B", "P2", "bug")
+	b.BlockedBy = []model.Ref{{Number: 1, State: "OPEN"}}
+	f := newFake(a, b)
+	app, out, errOut := newApp(f)
+	if err := app.Ready(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut.String(), "dependency cycle #1 → #2 → #1") {
+		t.Errorf("stderr = %q", errOut.String())
+	}
+	if out.String() != "no ready work\n" {
+		t.Errorf("stdout = %q", out.String())
+	}
+}
+
+func TestReadyJSON(t *testing.T) {
+	f := newFake(issue(1, "Work", "P2", "bug"))
+	app, out, _ := newApp(f)
+	app.JSON = true
+	if err := app.Ready(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var got []map[string]any
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out.String())
+	}
+	if len(got) != 1 || got[0]["number"].(float64) != 1 || got[0]["priority"] != "P2" {
+		t.Errorf("JSON = %s", out.String())
+	}
+}
+
+func TestListFilters(t *testing.T) {
+	epicIssue := issue(10, "Epic: big", "P2")
+	child := issue(11, "Child", "P2", "task")
+	child.Parent = &model.Ref{Number: 10, State: "OPEN"}
+	epicIssue.SubIssues = []model.Ref{{Number: 11, State: "OPEN"}}
+	f := newFake(
+		issue(1, "Bug A", "P2", "bug", "tests"),
+		issue(2, "Feature B", "P1", "enhancement"),
+		epicIssue, child,
+	)
+
+	app, out, _ := newApp(f)
+	if err := app.List(ctx, ListOpts{Label: "tests"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "#1") || strings.Contains(out.String(), "#2") {
+		t.Errorf("label filter output:\n%s", out.String())
+	}
+
+	out.Reset()
+	if err := app.List(ctx, ListOpts{Epic: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "#11") || strings.Contains(out.String(), "#1 ") {
+		t.Errorf("epic filter output:\n%s", out.String())
+	}
+}
+
+func TestListClosed(t *testing.T) {
+	closed := issue(5, "Done", "P2", "bug")
+	closed.State = "CLOSED"
+	f := newFake(issue(1, "Open", "P2", "bug"), closed)
+	app, out, _ := newApp(f)
+	if err := app.List(ctx, ListOpts{Closed: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "#5") || strings.Contains(out.String(), "#1") {
+		t.Errorf("closed output:\n%s", out.String())
+	}
+}
+
+func TestListEmpty(t *testing.T) {
+	f := newFake()
+	app, out, _ := newApp(f)
+	if err := app.List(ctx, ListOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "no issues\n" {
+		t.Errorf("output = %q", out.String())
+	}
+}
+
+func TestShow(t *testing.T) {
+	i := issue(7, "Detailed", "P1", "bug")
+	i.Body = "the body"
+	f := newFake(i)
+	app, out, _ := newApp(f)
+	if err := app.Show(ctx, 7); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"#7 P1 bug  Detailed", "the body"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("Show missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestShowNotFound(t *testing.T) {
+	app, _, _ := newApp(newFake())
+	err := app.Show(ctx, 99)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestShowJSON(t *testing.T) {
+	i := issue(7, "Detailed", "P1", "bug")
+	i.Body = "the body"
+	f := newFake(i)
+	app, out, _ := newApp(f)
+	app.JSON = true
+	if err := app.Show(ctx, 7); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["body"] != "the body" {
+		t.Errorf("JSON = %s", out.String())
+	}
+}
+
+func TestTriage(t *testing.T) {
+	f := newFake(
+		issue(3, "No labels at all"),
+		issue(1, "Only priority", "P2"),
+		issue(2, "Fully triaged", "P2", "bug"),
+	)
+	app, out, _ := newApp(f)
+	if err := app.Triage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "#1") || !strings.HasPrefix(lines[1], "#3") {
+		t.Errorf("Triage output:\n%s", out.String())
+	}
+}
+
+func TestTriageClean(t *testing.T) {
+	f := newFake(issue(2, "Fully triaged", "P2", "bug"))
+	app, out, _ := newApp(f)
+	if err := app.Triage(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "no untriaged issues\n" {
+		t.Errorf("output = %q", out.String())
+	}
+}
+
+func TestPrime(t *testing.T) {
+	inProg := issue(4, "Working", "P2", "bug", "in-progress")
+	inProg.Assignees = []string{"me"}
+	epicIssue := issue(10, "Epic: big", "P2")
+	epicIssue.SubIssues = []model.Ref{{Number: 11, State: "OPEN"}}
+	child := issue(11, "Child", "P2", "task")
+	child.Parent = &model.Ref{Number: 10, State: "OPEN"}
+	f := newFake(
+		issue(1, "Ready one", "P2", "bug"),
+		issue(3, "Untriaged one"),
+		inProg, epicIssue, child,
+	)
+	app, out, _ := newApp(f)
+	if err := app.Prime(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"# issues primer — o/r",
+		"Workflow: issues ready",
+		"## Ready (3 of 5 open)",
+		"## In progress (1)",
+		"@me",
+		"## Epics",
+		"#10 P2  Epic: big  0/1",
+		"1 untriaged → issues triage",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Prime missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "## Warnings") {
+		t.Errorf("clean repo grew warnings:\n%s", got)
+	}
+}
+
+func TestPrimeCapsReady(t *testing.T) {
+	var issues []*model.Issue
+	for n := 1; n <= 15; n++ {
+		issues = append(issues, issue(n, "Work", "P2", "bug"))
+	}
+	f := newFake(issues...)
+	app, out, _ := newApp(f)
+	if err := app.Prime(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "… 5 more: issues ready") {
+		t.Errorf("Prime cap:\n%s", out.String())
+	}
+}
+
+func TestPrimeJSON(t *testing.T) {
+	f := newFake(issue(1, "Ready one", "P2", "bug"))
+	app, out, _ := newApp(f)
+	app.JSON = true
+	if err := app.Prime(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["readyTotal"].(float64) != 1 || got["repo"] != "o/r" {
+		t.Errorf("JSON = %s", out.String())
+	}
+}
+
+func TestEpicStatusAll(t *testing.T) {
+	epicIssue := issue(10, "Epic: big", "P2")
+	epicIssue.SubIssues = []model.Ref{{Number: 11, State: "OPEN"}, {Number: 12, State: "OPEN"}}
+	child := issue(11, "Child", "P2", "task")
+	child.Parent = &model.Ref{Number: 10, State: "OPEN"}
+	done := issue(12, "Done child", "P2", "task")
+	done.State = "CLOSED"
+	done.Parent = &model.Ref{Number: 10, State: "OPEN"}
+	f := newFake(epicIssue, child, done)
+	app, out, _ := newApp(f)
+	if err := app.EpicStatus(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "#10 P2  Epic: big  1/2") {
+		t.Errorf("EpicStatus all:\n%s", out.String())
+	}
+}
+
+func TestEpicStatusOne(t *testing.T) {
+	epicIssue := issue(10, "Epic: big", "P2")
+	epicIssue.SubIssues = []model.Ref{{Number: 11, State: "OPEN"}, {Number: 12, State: "OPEN"}}
+	child := issue(11, "Child", "P2", "task")
+	child.Parent = &model.Ref{Number: 10, State: "OPEN"}
+	done := issue(12, "Done child", "P2", "task")
+	done.State = "CLOSED"
+	done.Parent = &model.Ref{Number: 10, State: "OPEN"}
+	f := newFake(epicIssue, child, done)
+	app, out, _ := newApp(f)
+	if err := app.EpicStatus(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"1/2", "○ #11", "✓ #12"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("EpicStatus missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestEpicStatusNotAnEpic(t *testing.T) {
+	f := newFake(issue(1, "Plain", "P2", "bug"))
+	app, _, _ := newApp(f)
+	err := app.EpicStatus(ctx, 1)
+	if err == nil || !strings.Contains(err.Error(), "not an epic") {
+		t.Errorf("err = %v", err)
+	}
+	if err := app.EpicStatus(ctx, 99); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("missing-issue err = %v", err)
+	}
+}
+
+func TestEpicStatusNoEpics(t *testing.T) {
+	f := newFake(issue(1, "Plain", "P2", "bug"))
+	app, out, _ := newApp(f)
+	if err := app.EpicStatus(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "no epics\n" {
+		t.Errorf("output = %q", out.String())
+	}
+}
+
+func TestEpicStatusOneJSON(t *testing.T) {
+	epicIssue := issue(10, "Epic: big", "P2")
+	epicIssue.SubIssues = []model.Ref{{Number: 11, State: "OPEN"}}
+	child := issue(11, "Child", "P2", "task")
+	child.Parent = &model.Ref{Number: 10, State: "OPEN"}
+	f := newFake(epicIssue, child)
+	app, out, _ := newApp(f)
+	app.JSON = true
+	if err := app.EpicStatus(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Epic     map[string]any   `json:"epic"`
+		Children []map[string]any `json:"children"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Epic["number"].(float64) != 10 || len(got.Children) != 1 {
+		t.Errorf("JSON = %s", out.String())
+	}
+}

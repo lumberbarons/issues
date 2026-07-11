@@ -1,0 +1,61 @@
+{
+  "epic": {
+    "number": 137,
+    "title": "Epic: Voltgo",
+    "state": "open",
+    "priority": "P2",
+    "type": null,
+    "areas": [],
+    "assignees": [],
+    "epic": true,
+    "inProgress": false,
+    "untriaged": false,
+    "parent": null,
+    "blockedBy": [],
+    "openBlockers": [],
+    "subIssues": [
+      120,
+      999
+    ],
+    "subIssuesCompleted": 1,
+    "createdAt": "2026-07-05T12:00:00Z"
+  },
+  "children": [
+    {
+      "number": 120,
+      "title": "Voltgo BLE battery controller: scaffold, client, collector",
+      "state": "open",
+      "priority": "P2",
+      "type": "enhancement",
+      "areas": [],
+      "assignees": [],
+      "epic": false,
+      "inProgress": false,
+      "untriaged": false,
+      "parent": null,
+      "blockedBy": [],
+      "openBlockers": [],
+      "subIssues": [],
+      "subIssuesCompleted": 0,
+      "createdAt": "2026-07-01T12:00:00Z"
+    },
+    {
+      "number": 999,
+      "title": "",
+      "state": "closed",
+      "priority": null,
+      "type": null,
+      "areas": [],
+      "assignees": [],
+      "epic": false,
+      "inProgress": false,
+      "untriaged": false,
+      "parent": null,
+      "blockedBy": [],
+      "openBlockers": [],
+      "subIssues": [],
+      "subIssuesCompleted": 0,
+      "createdAt": "0001-01-01T00:00:00Z"
+    }
+  ]
+}

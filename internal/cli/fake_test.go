@@ -1,0 +1,289 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/lumberbarons/issues/internal/gh"
+	"github.com/lumberbarons/issues/internal/model"
+)
+
+// fakeClient is a stateful in-memory gh.Client: mutations really mutate,
+// so guarded flows (claim, re-read) behave like the API.
+type fakeClient struct {
+	viewer   string
+	issues   []*model.Issue
+	labels   []gh.Label
+	comments map[int][]string
+	calls    []string
+	failOn   map[string]error
+	nextNum  int
+	// rivalOnAssign simulates a same-user claim race: every AddAssignee
+	// also lands this login, as if another session won inside the guard
+	// window.
+	rivalOnAssign string
+}
+
+func newFake(issues ...*model.Issue) *fakeClient {
+	f := &fakeClient{viewer: "me", comments: map[int][]string{}, failOn: map[string]error{}, nextNum: 100}
+	for _, i := range issues {
+		if i.ID == "" {
+			i.ID = fmt.Sprintf("ID%d", i.Number)
+		}
+		if i.State == "" {
+			i.State = "OPEN"
+		}
+		if i.CreatedAt.IsZero() {
+			i.CreatedAt = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+		}
+		f.issues = append(f.issues, i)
+	}
+	return f
+}
+
+func (f *fakeClient) record(call string) error {
+	f.calls = append(f.calls, call)
+	return f.failOn[strings.SplitN(call, " ", 2)[0]]
+}
+
+func (f *fakeClient) byNumber(n int) *model.Issue {
+	for _, i := range f.issues {
+		if i.Number == n {
+			return i
+		}
+	}
+	return nil
+}
+
+func (f *fakeClient) byID(id string) *model.Issue {
+	for _, i := range f.issues {
+		if i.ID == id {
+			return i
+		}
+	}
+	return nil
+}
+
+// refreshRefs recomputes Ref states and epic rollups after any mutation.
+func (f *fakeClient) refreshRefs() {
+	state := map[int]string{}
+	for _, i := range f.issues {
+		state[i.Number] = i.State
+	}
+	for _, i := range f.issues {
+		for idx, r := range i.BlockedBy {
+			if s, ok := state[r.Number]; ok {
+				i.BlockedBy[idx].State = s
+			}
+		}
+		completed := 0
+		for idx, r := range i.SubIssues {
+			if s, ok := state[r.Number]; ok {
+				i.SubIssues[idx].State = s
+				if s == "CLOSED" {
+					completed++
+				}
+			}
+		}
+		i.SubIssuesTotal = len(i.SubIssues)
+		i.SubIssuesCompleted = completed
+		i.BlockedByTotal = len(i.BlockedBy)
+	}
+}
+
+func (f *fakeClient) Viewer(ctx context.Context) (string, error) {
+	if err := f.record("Viewer"); err != nil {
+		return "", err
+	}
+	return f.viewer, nil
+}
+
+func (f *fakeClient) ListIssues(ctx context.Context, states []string) ([]model.Issue, error) {
+	if err := f.record("ListIssues " + strings.Join(states, ",")); err != nil {
+		return nil, err
+	}
+	f.refreshRefs()
+	var out []model.Issue
+	for _, i := range f.issues {
+		if slices.Contains(states, i.State) {
+			out = append(out, *i)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeClient) GetIssue(ctx context.Context, number int) (model.Issue, error) {
+	if err := f.record(fmt.Sprintf("GetIssue %d", number)); err != nil {
+		return model.Issue{}, err
+	}
+	f.refreshRefs()
+	i := f.byNumber(number)
+	if i == nil {
+		return model.Issue{}, fmt.Errorf("issue #%d not found in o/r", number)
+	}
+	return *i, nil
+}
+
+func (f *fakeClient) CreateIssue(ctx context.Context, title, body string, labels []string) (model.Issue, error) {
+	if err := f.record(fmt.Sprintf("CreateIssue %q labels=%s body=%q", title, strings.Join(labels, ","), body)); err != nil {
+		return model.Issue{}, err
+	}
+	f.nextNum++
+	i := &model.Issue{
+		ID: fmt.Sprintf("ID%d", f.nextNum), Number: f.nextNum, Title: title, Body: body,
+		State: "OPEN", Labels: slices.Clone(labels),
+		CreatedAt: time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC),
+	}
+	f.issues = append(f.issues, i)
+	return *i, nil
+}
+
+func (f *fakeClient) EditTitle(ctx context.Context, number int, title string) error {
+	if err := f.record(fmt.Sprintf("EditTitle %d %q", number, title)); err != nil {
+		return err
+	}
+	f.byNumber(number).Title = title
+	return nil
+}
+
+func (f *fakeClient) AddLabels(ctx context.Context, number int, labels []string) error {
+	if err := f.record(fmt.Sprintf("AddLabels %d %s", number, strings.Join(labels, ","))); err != nil {
+		return err
+	}
+	i := f.byNumber(number)
+	for _, l := range labels {
+		if !slices.Contains(i.Labels, l) {
+			i.Labels = append(i.Labels, l)
+		}
+	}
+	return nil
+}
+
+func (f *fakeClient) RemoveLabel(ctx context.Context, number int, label string) error {
+	if err := f.record(fmt.Sprintf("RemoveLabel %d %s", number, label)); err != nil {
+		return err
+	}
+	i := f.byNumber(number)
+	i.Labels = slices.DeleteFunc(slices.Clone(i.Labels), func(l string) bool { return l == label })
+	return nil
+}
+
+func (f *fakeClient) AddAssignee(ctx context.Context, number int, login string) error {
+	if err := f.record(fmt.Sprintf("AddAssignee %d %s", number, login)); err != nil {
+		return err
+	}
+	i := f.byNumber(number)
+	if !slices.Contains(i.Assignees, login) {
+		i.Assignees = append(i.Assignees, login)
+	}
+	if f.rivalOnAssign != "" && !slices.Contains(i.Assignees, f.rivalOnAssign) {
+		i.Assignees = append(i.Assignees, f.rivalOnAssign)
+	}
+	return nil
+}
+
+func (f *fakeClient) RemoveAssignees(ctx context.Context, number int, logins []string) error {
+	if err := f.record(fmt.Sprintf("RemoveAssignees %d %s", number, strings.Join(logins, ","))); err != nil {
+		return err
+	}
+	i := f.byNumber(number)
+	i.Assignees = slices.DeleteFunc(slices.Clone(i.Assignees), func(l string) bool { return slices.Contains(logins, l) })
+	return nil
+}
+
+func (f *fakeClient) Comment(ctx context.Context, number int, body string) error {
+	if err := f.record(fmt.Sprintf("Comment %d %q", number, body)); err != nil {
+		return err
+	}
+	f.comments[number] = append(f.comments[number], body)
+	return nil
+}
+
+func (f *fakeClient) CloseIssue(ctx context.Context, issueID, reason string) error {
+	if err := f.record(fmt.Sprintf("CloseIssue %s %s", issueID, reason)); err != nil {
+		return err
+	}
+	i := f.byID(issueID)
+	i.State = "CLOSED"
+	i.StateReason = reason
+	return nil
+}
+
+func (f *fakeClient) AddBlockedBy(ctx context.Context, issueID, blockingIssueID string) error {
+	if err := f.record(fmt.Sprintf("AddBlockedBy %s %s", issueID, blockingIssueID)); err != nil {
+		return err
+	}
+	i, b := f.byID(issueID), f.byID(blockingIssueID)
+	i.BlockedBy = append(i.BlockedBy, model.Ref{Number: b.Number, State: b.State})
+	return nil
+}
+
+func (f *fakeClient) RemoveBlockedBy(ctx context.Context, issueID, blockingIssueID string) error {
+	if err := f.record(fmt.Sprintf("RemoveBlockedBy %s %s", issueID, blockingIssueID)); err != nil {
+		return err
+	}
+	i, b := f.byID(issueID), f.byID(blockingIssueID)
+	i.BlockedBy = slices.DeleteFunc(slices.Clone(i.BlockedBy), func(r model.Ref) bool { return r.Number == b.Number })
+	return nil
+}
+
+func (f *fakeClient) AddSubIssue(ctx context.Context, parentID, childID string, replaceParent bool) error {
+	if err := f.record(fmt.Sprintf("AddSubIssue %s %s replace=%v", parentID, childID, replaceParent)); err != nil {
+		return err
+	}
+	parent, child := f.byID(parentID), f.byID(childID)
+	if child.Parent != nil {
+		if !replaceParent {
+			return fmt.Errorf("#%d already has a parent", child.Number)
+		}
+		old := f.byNumber(child.Parent.Number)
+		old.SubIssues = slices.DeleteFunc(slices.Clone(old.SubIssues), func(r model.Ref) bool { return r.Number == child.Number })
+	}
+	child.Parent = &model.Ref{Number: parent.Number, State: parent.State}
+	parent.SubIssues = append(parent.SubIssues, model.Ref{Number: child.Number, State: child.State})
+	return nil
+}
+
+func (f *fakeClient) RemoveSubIssue(ctx context.Context, parentID, childID string) error {
+	if err := f.record(fmt.Sprintf("RemoveSubIssue %s %s", parentID, childID)); err != nil {
+		return err
+	}
+	parent, child := f.byID(parentID), f.byID(childID)
+	child.Parent = nil
+	parent.SubIssues = slices.DeleteFunc(slices.Clone(parent.SubIssues), func(r model.Ref) bool { return r.Number == child.Number })
+	return nil
+}
+
+func (f *fakeClient) ListLabels(ctx context.Context) ([]gh.Label, error) {
+	if err := f.record("ListLabels"); err != nil {
+		return nil, err
+	}
+	return slices.Clone(f.labels), nil
+}
+
+func (f *fakeClient) CreateLabel(ctx context.Context, label gh.Label) error {
+	if err := f.record("CreateLabel " + label.Name); err != nil {
+		return err
+	}
+	f.labels = append(f.labels, label)
+	return nil
+}
+
+// newApp wires an App to the fake with captured output.
+func newApp(f *fakeClient) (*App, *bytes.Buffer, *bytes.Buffer) {
+	out, errOut := &bytes.Buffer{}, &bytes.Buffer{}
+	return &App{
+		Client: f,
+		Repo:   gh.Repo{Owner: "o", Name: "r"},
+		Out:    out,
+		ErrOut: errOut,
+	}, out, errOut
+}
+
+func issue(n int, title string, labels ...string) *model.Issue {
+	return &model.Issue{Number: n, Title: title, Labels: labels}
+}

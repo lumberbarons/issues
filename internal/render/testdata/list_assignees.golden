@@ -1,0 +1,2 @@
+#120 P2 enhancement  Voltgo BLE battery controller: scaffold, client, collector  @lumberbarons
+#117 P1 bug (tests)  Tautological assertions on state the code cannot modify
