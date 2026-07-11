@@ -63,11 +63,15 @@ func TestReadyJSON(t *testing.T) {
 	if err := app.Ready(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var got []map[string]any
-	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, out.String())
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 NDJSON line, got %d:\n%s", len(lines), out.String())
 	}
-	if len(got) != 1 || got[0]["number"].(float64) != 1 || got[0]["priority"] != "P2" {
+	var got map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &got); err != nil {
+		t.Fatalf("invalid NDJSON line: %v\n%s", err, lines[0])
+	}
+	if got["number"].(float64) != 1 || got["priority"] != "P2" {
 		t.Errorf("JSON = %s", out.String())
 	}
 }
@@ -97,6 +101,32 @@ func TestListFilters(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "#11") || strings.Contains(out.String(), "#1 ") {
 		t.Errorf("epic filter output:\n%s", out.String())
+	}
+}
+
+func TestListGroupsReadyFirst(t *testing.T) {
+	epicIssue := issue(10, "Epic: big", "P0")
+	epicIssue.SubIssues = []model.Ref{{Number: 11, State: "OPEN"}}
+	blockedChild := issue(11, "Child", "P0", "task")
+	blockedChild.Parent = &model.Ref{Number: 10, State: "OPEN"}
+	blockedChild.BlockedBy = []model.Ref{{Number: 12, State: "OPEN"}}
+	claimed := issue(12, "Claimed", "P0", "bug", "in-progress")
+	f := newFake(epicIssue, blockedChild, claimed, issue(13, "Plain ready", "P4", "bug"))
+	app, out, _ := newApp(f)
+	if err := app.List(ctx, ListOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	wantOrder := []string{"#13", "#12", "#11", "#10"} // ready, claimed, blocked, epic
+	for i, prefix := range wantOrder {
+		if !strings.HasPrefix(lines[i], prefix) {
+			t.Fatalf("line %d = %q, want prefix %q\n%s", i, lines[i], prefix, out.String())
+		}
+	}
+	for _, want := range []string{"[blocked by #12]", "[in progress]", "[epic 0/1]"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing annotation %q:\n%s", want, out.String())
+		}
 	}
 }
 
