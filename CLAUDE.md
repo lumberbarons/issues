@@ -1,0 +1,43 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+`issues` is an opinionated, agentic-first CLI for tracking work in GitHub Issues — beads-inspired ready-work detection, priority/type/area label conventions, native sub-issues and dependencies, and an `issues prime` command that injects tracker state into an agent session. [DESIGN.md](DESIGN.md) is the authoritative design document: conventions, read-path normalization rules, API strategy, and spike results. Read it before changing behavior.
+
+## Commands
+
+```sh
+go build ./...                            # build
+go test -race ./...                       # full test suite (what CI runs)
+go test ./internal/cli -run TestStart     # single test
+go test ./internal/render -update         # rewrite golden files after renderer changes
+golangci-lint run                          # lint (CI-blocking)
+shellcheck install.sh                      # install.sh is linted in CI too
+```
+
+Coverage is a blocking CI gate: 90% statement coverage over the `internal/` packages (`cmd/` is excluded as pure wiring — see `.testcoverage.yml`). New logic needs tests or CI fails.
+
+Releases are tag-driven (`vX.Y.Z` → goreleaser). Commit messages use `feat:`/`fix:`/`chore:`/`docs:` prefixes — they feed the release changelog.
+
+## Architecture
+
+The layering exists so everything with behavior is testable without hitting GitHub:
+
+- `cmd/issues/` — main + urfave/cli v3 flag wiring only. No behavior; excluded from coverage.
+- `internal/cli/` — the commands, written against the `gh.Client` interface. Tested with `fakeClient` (`fake_test.go`), a stateful in-memory client where mutations really mutate, so guarded flows (claim, re-read after claim) behave like the real API.
+- `internal/gh/` — thin API layer: the `Client` interface and its go-gh-backed implementation. Auth reuses the `gh` CLI's stored credentials (no auth flow of our own); repo detection comes from the git remote.
+- `internal/model/` — pure domain logic: readiness, label normalization, cycle detection. No I/O, plain unit tests.
+- `internal/render/` — text and JSON renderers, golden-file tested (`testdata/*.golden`).
+- `internal/conventions/` — the opinions: label set, body template, primer text.
+
+API strategy: one GraphQL query per command where possible. `ready`/`prime` fetch all open issues (labels, assignees, parent, sub-issues, blockers) in a single paginated query and filter client-side. Nested connections are capped, not paginated — warn when `totalCount` exceeds the cap rather than truncating silently.
+
+## Invariants to preserve
+
+- **Write path enforces, read path normalizes.** Anything the tool writes conforms to the conventions (exactly one priority label, one type label, template body). Issues created outside the tool are normal, not defects: never auto-"repaired", never hidden. Normalization is deterministic (highest priority wins, missing priority renders `P?` and sorts last) and lives pure in `internal/model`.
+- **Cycle checks are client-side and mandatory.** GitHub's API rejects self-blocks and 2-cycles but silently accepts longer dependency cycles (verified by spike), so `block`/`create --blocked-by` must run a transitive check before mutating, and the read path must detect cycles too — a cycle silently removes all its members from `ready`.
+- **Exit codes are contract.** Agent loops branch on them: `3` = already claimed (pick next ready item), `4` = auth failure (`gh auth login`), `2` = usage. Defined in `internal/cli/app.go`.
+- **Output is agent-facing.** One compact line per issue, no URLs, no ANSI when not a TTY, stable sort. `--json` is a stable flat schema (deps as number arrays, GraphQL shapes hidden); list-shaped output is NDJSON so truncation degrades gracefully. The `prime` output has a token budget (~600 tokens) — don't add prose to it casually.
+- **Epic-ness = has sub-issues.** The `Epic: ` title prefix is cosmetic; `ready` excludes any issue with sub-issues.
