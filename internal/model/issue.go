@@ -57,11 +57,26 @@ func IsType(label string) bool {
 // is the visibility.
 const InProgressLabel = "in-progress"
 
+// stateOpen is GitHub's issue state enum for an open issue, as it appears
+// on the wire.
+const stateOpen = "OPEN"
+
+// stateIsOpen is the single definition of issue openness; every State
+// comparison goes through it so casing/polarity live in one place.
+func stateIsOpen(state string) bool {
+	return state == stateOpen
+}
+
 // Ref is a lightweight reference to another issue, as returned inside
 // nested connections (blockers, sub-issues).
 type Ref struct {
 	Number int
 	State  string // "OPEN" or "CLOSED"
+}
+
+// IsOpen reports whether the referenced issue is open.
+func (r Ref) IsOpen() bool {
+	return stateIsOpen(r.State)
 }
 
 // Comment is a recent issue comment (populated by show only).
@@ -160,7 +175,13 @@ func (i Issue) InProgress() bool {
 
 // IsOpen reports whether the issue is open.
 func (i Issue) IsOpen() bool {
-	return i.State == "OPEN"
+	return stateIsOpen(i.State)
+}
+
+// Claimed reports whether someone has taken the issue: the assignee is the
+// claim, the in-progress label is the visibility. Either half counts.
+func (i Issue) Claimed() bool {
+	return i.InProgress() || len(i.Assignees) > 0
 }
 
 // OpenBlockers returns the numbers of open blocking issues; closed blockers
@@ -168,7 +189,7 @@ func (i Issue) IsOpen() bool {
 func (i Issue) OpenBlockers() []int {
 	var out []int
 	for _, b := range i.BlockedBy {
-		if b.State == "OPEN" {
+		if b.IsOpen() {
 			out = append(out, b.Number)
 		}
 	}
@@ -209,7 +230,7 @@ func listBucket(i Issue) int {
 		return 4
 	case i.IsEpic():
 		return 3
-	case i.InProgress() || len(i.Assignees) > 0:
+	case i.Claimed():
 		return 1
 	case len(i.OpenBlockers()) > 0:
 		return 2
@@ -242,7 +263,7 @@ func SortForList(issues []Issue) {
 func Ready(issues []Issue) []Issue {
 	var out []Issue
 	for _, i := range issues {
-		if !i.IsOpen() || i.IsEpic() || i.InProgress() || len(i.Assignees) > 0 {
+		if !i.IsOpen() || i.IsEpic() || i.Claimed() {
 			continue
 		}
 		if len(i.OpenBlockers()) > 0 {

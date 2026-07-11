@@ -50,7 +50,7 @@ func annotations(i model.Issue) string {
 		}
 		parts = append(parts, "blocked by "+strings.Join(refs, " "))
 	}
-	if i.InProgress() || len(i.Assignees) > 0 {
+	if i.Claimed() {
 		claim := "in progress"
 		if len(i.Assignees) > 0 {
 			claim += " @" + strings.Join(i.Assignees, " @")
@@ -150,7 +150,7 @@ func refList(refs []model.Ref) string {
 	parts := make([]string, len(refs))
 	for idx, r := range refs {
 		parts[idx] = fmt.Sprintf("#%d", r.Number)
-		if r.State == "CLOSED" {
+		if !r.IsOpen() {
 			parts[idx] += " (closed)"
 		}
 	}
@@ -163,7 +163,7 @@ func EpicStatus(w io.Writer, epic model.Issue, byNumber map[int]model.Issue) {
 	fmt.Fprintf(w, "%s  %d/%d\n", Line(epic), epic.SubIssuesCompleted, epic.SubIssuesTotal)
 	for _, ref := range epic.SubIssues {
 		mark := "○"
-		if ref.State == "CLOSED" {
+		if !ref.IsOpen() {
 			mark = "✓"
 		}
 		if child, ok := byNumber[ref.Number]; ok {

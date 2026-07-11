@@ -110,7 +110,7 @@ func blockedByGraph(issues []Issue) map[int][]int {
 			continue
 		}
 		for _, b := range i.BlockedBy {
-			if b.State == "OPEN" && open[b.Number] {
+			if b.IsOpen() && open[b.Number] {
 				adj[i.Number] = append(adj[i.Number], b.Number)
 			}
 		}

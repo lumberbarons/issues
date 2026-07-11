@@ -94,6 +94,32 @@ func TestEpicInProgressOpen(t *testing.T) {
 	}
 }
 
+func TestRefIsOpen(t *testing.T) {
+	if !(Ref{State: "OPEN"}).IsOpen() {
+		t.Error("open ref reported closed")
+	}
+	if (Ref{State: "CLOSED"}).IsOpen() {
+		t.Error("closed ref reported open")
+	}
+}
+
+func TestClaimed(t *testing.T) {
+	tests := []struct {
+		name string
+		i    Issue
+		want bool
+	}{
+		{"unclaimed", Issue{Labels: []string{"bug"}}, false},
+		{"in-progress label", Issue{Labels: []string{"in-progress"}}, true},
+		{"assignee only", Issue{Assignees: []string{"alice"}}, true},
+	}
+	for _, tt := range tests {
+		if got := tt.i.Claimed(); got != tt.want {
+			t.Errorf("%s: Claimed() = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestOpenBlockers(t *testing.T) {
 	i := Issue{BlockedBy: []Ref{{Number: 1, State: "OPEN"}, {Number: 2, State: "CLOSED"}, {Number: 3, State: "OPEN"}}}
 	if got := i.OpenBlockers(); !reflect.DeepEqual(got, []int{1, 3}) {
