@@ -27,7 +27,7 @@ session re-derives the same jq pipelines from scratch.
 | `bd ready` — zero open blockers | `issues ready` | `blockedBy` (native dependencies), filtered + priority-sorted |
 | `bd prime` — session-start context injection | `issues prime` | generated from live repo state + built-in conventions |
 | hierarchical IDs (`bd-a3f8.1`) for epics | `issues epic` | native sub-issues (`parent` / `subIssues`) |
-| `bd update --claim` — atomic assign + in-progress | `issues start` | assign `@me` + `in-progress` label |
+| `bd update --claim` — claim: assign + in-progress | `issues start` | assign `@me` + `in-progress` label |
 | priorities 0–4 | P0–P4 labels | labels (issue *types* are org-only; labels work on personal repos) |
 | token-lean, JSON-optional output | same | `--json` on every command, compact text default |
 | `bd remember` — persistent insights | deferred (open question) | overlaps with Claude Code's own memory system |
@@ -38,7 +38,11 @@ so the entire distributed-state problem beads solves disappears.
 ## Enshrined conventions
 
 These are the conventions already proven in solar-controller's CLAUDE.md, moved from
-prose into code. The tool *enforces* them; `prime` *teaches* them.
+prose into code. They are **guarantees on the tool's own write path** — anything
+`create`/`set`/`epic` touches conforms — and **normalization rules on the read
+path**. GitHub has many entry points (web UI, mobile, bots, drive-by bug reports),
+so issues that don't follow the conventions are first-class citizens, not defects:
+never hidden, never auto-"repaired". `prime` *teaches* the conventions.
 
 - **Priority labels**, every issue gets exactly one: `P0` (critical) → `P4` (backlog).
   Default `P2`.
@@ -57,19 +61,61 @@ prose into code. The tool *enforces* them; `prime` *teaches* them.
   `### Done when` (checklist). Scaffolded by `create`, sections omitted when empty.
 - **Workflow**: `ready` → `start` → branch (`feat/`|`fix/`|`chore/`) → PR with
   `Fixes #n`. Closing via PR is the norm; `close` is for wontfix/duplicate.
+- **Claiming is guarded**: `start` refuses an issue that is already assigned or
+  `in-progress` and exits with a distinct code, so an agent loop moves on to the
+  next ready item instead of doubling up. GitHub has no conditional writes, so the
+  guard is check-then-act with a re-read after claiming — a small race window
+  remains (see open questions).
+- **Untriaged, not broken**: an issue missing its priority or type label — typical
+  for anything filed outside the tool — is *untriaged*, a normal state. `issues
+  triage` lists them so a human or agent can label each via `set`; nothing is ever
+  stamped with defaults automatically, since auto-labeling someone else's report
+  destroys information.
+- **Contradictions** (two priority labels, an in-progress epic) are the only
+  per-issue warnings `prime` emits; normalization still picks a deterministic
+  answer in the meantime.
+
+### Read-path normalization
+
+Deterministic rules, implemented pure in `internal/model` and stated in the `prime`
+primer so agents know what they're looking at:
+
+- Missing priority → renders as `P?`, sorts after P4. Multiple priority labels →
+  highest wins, plus a warning.
+- Missing type → shown without one. Multiple → first of bug|enhancement|task wins,
+  plus a warning.
+- Epic-ness = *has sub-issues*; the `Epic: ` title prefix is cosmetic. `ready`
+  excludes any issue with sub-issues.
+- Bodies render as-is. The template is scaffolding for `create`, never retrofitted
+  onto issues written by others.
+- Untriaged issues do appear in `ready` (invisible work is the failure mode), sorted
+  after explicitly-prioritized work. `start` on an untriaged issue requires
+  `--priority` — claiming forces triage.
 
 ## Command surface (v1)
 
 ```
 issues prime                      # session-start context (see below)
-issues ready                      # unblocked, non-epic, open; sorted P0→P4, then oldest
+issues ready                      # open, non-epic, zero *open* blockers; sorted
+                                  # P0→P4 then P?, oldest first within a priority
 issues list [--label X] [--epic N] [--closed]
 issues show <n>                   # detail: body, deps, parent, children, recent comments
 issues create --type bug|enhancement|task [--priority P0..P4] [--area X]
               [--blocked-by N...] [--parent N] [--discovered-from N]
               --title "..." [--body-file F | --edit]
-issues start <n>                  # claim: assign @me, add in-progress label
-issues close <n> --reason "..."   # comment + close (not-planned unless --completed)
+issues start <n> [--priority P0..P4] [--force]
+                                  # guarded claim: refuses if already assigned or
+                                  # in-progress (distinct exit code — pick the next
+                                  # ready item); --force steals; untriaged issues
+                                  # require --priority (claim = triage)
+issues triage                     # untriaged issues (missing priority/type), oldest
+                                  # first — work through them with `set`
+issues set <n> [--priority P0..P4] [--type bug|enhancement|task] [--add-area X]
+           [--remove-area X] [--parent N | --no-parent] [--title "..."]
+                                  # retriage/edit within conventions (swaps the old
+                                  # priority/type label, never stacks a second one)
+issues close <n> --reason "..."   # comment + close (not-planned unless --completed
+                                  # or --duplicate-of M)
 issues block <n> --on <m>         # add dependency (cycle-checked)
 issues unblock <n> --from <m>
 issues epic create --title "..." [--children N,N,N]
@@ -84,12 +130,16 @@ Global flags: `--json` (structured output, stable schema), `--repo owner/name`
 
 The session-start ritual, modeled on `bd prime`: one command whose output an agent
 injects at the top of a session (via CLAUDE.md instruction or hook) instead of
-maintaining hand-written workflow prose. Two parts:
+maintaining hand-written workflow prose. Three parts:
 
 1. **Static primer** — the conventions and workflow above, compressed to a few
    hundred tokens, including the tool's own command cheatsheet.
 2. **Live state** — ready work (top N by priority), in-progress issues and their
    assignee, epics with progress (`#137 Voltgo 2/6`), and open-blocker counts.
+3. **Warnings** — contradictions only (`⚠ #42 has two priority labels`). Absences
+   are not warnings: untriaged work rolls up to a single line (`7 untriaged →
+   issues triage`), so a public repo full of drive-by reports doesn't drown the
+   primer. Section omitted entirely when the repo is clean.
 
 Sketch:
 
@@ -121,7 +171,8 @@ typical repo.
 - `--json` everywhere, with a flat schema (deps as number arrays, not
   `{nodes:[...]}` wrappers — hide GraphQL shapes from consumers).
 - Errors are one line, actionable, exit codes meaningful (`ready` with no results
-  exits 0 with `no ready work`; auth failure exits 4; etc.).
+  exits 0 with `no ready work`; `start` on a claimed issue exits 3 with
+  `already claimed`; auth failure exits 4; etc.).
 
 ## Architecture
 
@@ -137,31 +188,71 @@ typical repo.
 - **Layout**:
   - `cmd/issues/` — main, urfave/cli command wiring
   - `internal/gh/` — thin API layer (interface, so commands are testable against a fake)
-  - `internal/model/` — Issue/Epic domain types, ready/cycle logic (pure, unit-tested)
+  - `internal/model/` — Issue/Epic domain types, ready/normalization/cycle logic
+    (pure, unit-tested)
   - `internal/render/` — text + JSON renderers (golden-file tests)
   - `internal/conventions/` — labels, body template, primer text (the opinions live here)
-- **Testing**: unit tests against a fake API layer; golden files for renderer output;
-  one integration smoke test behind a build tag that hits a real scratch repo.
+- **Testing**: unit tests against a fake API layer; golden files for renderer output.
+  An integration smoke test against a real scratch repo (behind a build tag, run
+  manually — it needs a token and mutates state, so it stays out of CI) is deferred
+  for now.
 
-## Milestones
+## Build & distribution
+
+- **CI** (GitHub Actions, actions pinned by SHA at their latest versions): one
+  workflow triggered on PRs and pushes to `main`, running `golangci-lint` and the
+  full test suite (`go test -race -coverprofile ./...`), plus `shellcheck` on
+  `install.sh` — the one thing strangers pipe into bash gets linted like everything
+  else. Go version comes from `go.mod`.
+- **Coverage gate**: 90% minimum, blocking. Go's toolchain measures *statement*
+  coverage only (line-equivalent in practice; there is no native branch coverage —
+  see gobco note in open questions), enforced with `go-test-coverage` in CI.
+  `cmd/` wiring is excluded so the bar bites on the logic packages
+  (`internal/model`, `internal/render`, `internal/conventions`, `internal/gh`).
+- **Dependabot** keeps the SHA-pinned actions and Go modules fresh (`github-actions`
+  and `gomod` ecosystems), configured with a cooldown so new releases settle before
+  we pick them up.
+- **Releases are tag-driven**: pushing a `vX.Y.Z` tag runs goreleaser, which builds
+  static binaries for linux and macOS (amd64 + arm64, CGO off), stamps the version
+  into `issues --version` via ldflags, and publishes the archives plus a checksums
+  file as a GitHub Release. Release notes come from goreleaser's changelog grouping
+  over commit prefixes (`feat:`/`fix:`/`docs:`/...), which we already write.
+- **install.sh** at the repo root, usable as
+  `curl -fsSL https://raw.githubusercontent.com/lumberbarons/issues/main/install.sh | bash`:
+  detects OS/arch via `uname`, resolves the latest release through the GitHub API,
+  downloads the matching archive, verifies it against the checksums file, and
+  installs to `$HOME/.local/bin` (`INSTALL_DIR` overrides; never sudo), printing a
+  PATH hint when needed. `go install .../cmd/issues@latest` remains the
+  toolchain-native alternative.
 
 - **M0 — scaffold**: module, urfave/cli v3 skeleton, go-gh auth + repo detection,
-  `issues list` (proves the GraphQL query and renderer end-to-end).
+  `issues list` (proves the GraphQL query and renderer end-to-end). The query must
+  include `parent`/`subIssues`/`blockedBy` from day one — this milestone verifies
+  the exact field names, any feature headers, whether the API rejects dependency
+  cycles natively (if it does, our cycle check is just a friendlier error), and that
+  nested `subIssues`/`blockedBy` connections behave under capped `first: N` slices —
+  nested pagination is awkward, so cap and warn on truncation rather than silently
+  dropping. CI (lint + full tests) arrives with the scaffold.
 - **M1 — read**: `ready`, `show`, `epic status`, `prime` v1. *This is the payoff
-  milestone — adopt in solar-controller immediately.*
-- **M2 — write**: `create` (template + label enforcement), `block`/`unblock` with
-  cycle detection, `start`, `close`, `epic create`.
+  milestone — adopt in solar-controller immediately.* The first tagged release
+  (goreleaser + install.sh) ships here, since adoption needs an installable binary.
+- **M2 — write**: `create` (template + label enforcement), `set` (retriage —
+  priority changes are the most common tracker operation, and doing them through
+  the tool is what keeps the one-label invariants true), `triage`, `block`/`unblock`
+  with cycle detection, `start`, `close`, `epic create`.
 - **M3 — bootstrap**: `init` (create label set in a fresh repo, emit the CLAUDE.md
   snippet that says little more than "run `issues prime`"). Replace solar-controller's
   hand-written conventions section with it.
 - **M4 — polish**: `--json` everywhere, pagination hardening, maybe a read cache,
-  maybe `remember`, maybe a `gh` extension alias (`gh-issues`) for distribution.
+  maybe `remember`. Distribution is `go install` only — no `gh` extension; agents
+  invoke the bare `issues` binary and that's the whole interface.
 
 ## Open questions
 
-- **Name.** Working name `issues` (binary and repo). Generic but reads perfectly in
-  agent transcripts (`issues ready`, `issues prime`). Alternatives if it collides:
-  `iz`, `ghi`, `beans`.
+- **Name — resolved.** Binary and repo are `issues`. `is` was considered — no shell
+  builtin, POSIX utility, or popular tool conflicts with it — but rejected as
+  ungreppable and ambiguous in prose and transcripts (`is block 42 --on 7`). Anyone
+  who wants the terse form can `alias is=issues` locally; agents use the real name.
 - **`remember`.** beads couples memory to the tracker; Claude Code has its own
   memory system. Skip, or implement as comments on a pinned "agent notes" issue?
   Deferred to M4 — need real usage first.
@@ -169,3 +260,11 @@ typical repo.
   churn). v1: both — assign is the claim, label is the visibility.
 - **Multi-repo prime.** Someday `issues prime --all-repos` for a workspace overview?
   Out of scope for v1.
+- **Branch coverage.** The Go toolchain only does statement coverage; `gobco` adds
+  branch/condition coverage via source instrumentation but is niche and awkward in
+  CI. Revisit if statement coverage starts hiding untested branches in practice.
+- **Same-user claim races.** Every agent authenticates as `@me`, so two parallel
+  sessions that race `start` inside the guard window are indistinguishable by
+  assignee or label — both think they won. If this happens in practice, tie-break
+  with a claim comment carrying a session nonce (earliest comment wins, loser backs
+  off). Deferred until actually observed.
