@@ -95,16 +95,45 @@ func JSONIssue(w io.Writer, i model.Issue) error {
 	return writeJSON(w, ToJSON(i, true))
 }
 
+// WarningJSON is one structured warning: a machine-readable kind plus the
+// numbers involved, alongside the rendered human message. Consumers branch
+// on kind rather than parsing message prose.
+type WarningJSON struct {
+	Kind    string `json:"kind"`
+	Issue   int    `json:"issue,omitempty"`
+	Cycle   []int  `json:"cycle,omitempty"`
+	Total   int    `json:"total,omitempty"`
+	Fetched int    `json:"fetched,omitempty"`
+	Message string `json:"message"`
+}
+
 // PrimeJSON is the structured form of the primer's live state.
 type PrimeJSON struct {
-	Repo       string      `json:"repo"`
-	OpenTotal  int         `json:"openTotal"`
-	ReadyTotal int         `json:"readyTotal"`
-	Ready      []IssueJSON `json:"ready"`
-	InProgress []IssueJSON `json:"inProgress"`
-	Epics      []IssueJSON `json:"epics"`
-	Untriaged  int         `json:"untriaged"`
-	Warnings   []string    `json:"warnings"`
+	Repo       string        `json:"repo"`
+	OpenTotal  int           `json:"openTotal"`
+	ReadyTotal int           `json:"readyTotal"`
+	Ready      []IssueJSON   `json:"ready"`
+	InProgress []IssueJSON   `json:"inProgress"`
+	Epics      []IssueJSON   `json:"epics"`
+	Untriaged  int           `json:"untriaged"`
+	Warnings   []WarningJSON `json:"warnings"`
+}
+
+// warningsJSON maps structured warnings to their JSON form, attaching the
+// rendered message so both machine and human consumers are served.
+func warningsJSON(ws []model.Warning) []WarningJSON {
+	out := make([]WarningJSON, 0, len(ws))
+	for _, w := range ws {
+		out = append(out, WarningJSON{
+			Kind:    string(w.Kind),
+			Issue:   w.Issue,
+			Cycle:   w.Cycle,
+			Total:   w.Total,
+			Fetched: w.Fetched,
+			Message: FormatWarning(w),
+		})
+	}
+	return out
 }
 
 // JSONPrime writes the primer's live state as JSON (the static primer text
@@ -118,7 +147,7 @@ func JSONPrime(w io.Writer, d PrimeData) error {
 		InProgress: toJSONList(d.InProgress),
 		Epics:      toJSONList(d.Epics),
 		Untriaged:  d.Untriaged,
-		Warnings:   emptyNotNull(d.Warnings),
+		Warnings:   warningsJSON(d.Warnings),
 	}
 	return writeJSON(w, out)
 }

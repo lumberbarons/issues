@@ -2,9 +2,11 @@ package render
 
 import (
 	"bytes"
+	"encoding/json"
 	"flag"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -182,7 +184,7 @@ func TestPrime(t *testing.T) {
 		OpenTotal:  14,
 		InProgress: []model.Issue{inProgress},
 		Epics:      []model.Issue{epic},
-		Warnings:   []string{"#42 has multiple priority labels; highest wins"},
+		Warnings:   []model.Warning{{Kind: model.WarnMultiPriority, Issue: 42}},
 		Untriaged:  7,
 	}
 	var buf bytes.Buffer
@@ -250,6 +252,37 @@ func TestJSONPrime(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkGolden(t, "prime_json", buf.Bytes())
+}
+
+func TestJSONPrimeWarningsAreStructured(t *testing.T) {
+	d := PrimeData{
+		Repo: "o/r", OpenTotal: 1, ReadyTotal: 0,
+		Warnings: []model.Warning{
+			{Kind: model.WarnBlockersCapped, Issue: 7, Total: 25, Fetched: 1},
+			{Kind: model.WarnDependencyCycle, Cycle: []int{8, 9, 8}},
+		},
+	}
+	var buf bytes.Buffer
+	if err := JSONPrime(&buf, d); err != nil {
+		t.Fatal(err)
+	}
+	var got PrimeJSON
+	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Warnings) != 2 {
+		t.Fatalf("warnings = %v", got.Warnings)
+	}
+	if got.Warnings[0].Kind != "blockers-truncated" || got.Warnings[0].Issue != 7 ||
+		got.Warnings[0].Total != 25 || got.Warnings[0].Fetched != 1 {
+		t.Errorf("blocker warning not machine-readable: %+v", got.Warnings[0])
+	}
+	if got.Warnings[1].Kind != "dependency-cycle" || !reflect.DeepEqual(got.Warnings[1].Cycle, []int{8, 9, 8}) {
+		t.Errorf("cycle warning not machine-readable: %+v", got.Warnings[1])
+	}
+	if got.Warnings[1].Message == "" {
+		t.Error("warning missing human-readable message")
+	}
 }
 
 func TestJSONEpicStatus(t *testing.T) {

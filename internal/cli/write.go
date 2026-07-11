@@ -337,11 +337,7 @@ func (a *App) Block(ctx context.Context, number, blocker int) error {
 		return nil
 	}
 	if cycle := model.WouldCycle(issues, number, blocker); cycle != nil {
-		parts := make([]string, len(cycle))
-		for i, n := range cycle {
-			parts[i] = fmt.Sprintf("#%d", n)
-		}
-		return genericErr("refusing: would create dependency cycle %s", strings.Join(parts, " → "))
+		return genericErr("refusing: would create dependency cycle %s", render.FormatCycle(cycle))
 	}
 	if err := a.Client.AddBlockedBy(ctx, issue.ID, blockerIssue.ID); err != nil {
 		return err

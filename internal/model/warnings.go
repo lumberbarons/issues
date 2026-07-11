@@ -1,59 +1,79 @@
 package model
 
-import (
-	"fmt"
-	"strconv"
-	"strings"
+import "slices"
+
+// WarningKind identifies a contradiction or data-completeness notice, so
+// callers can filter by cause and renderers can format the message without
+// parsing prose.
+type WarningKind string
+
+const (
+	WarnMultiPriority   WarningKind = "multiple-priority-labels"
+	WarnMultiType       WarningKind = "multiple-type-labels"
+	WarnInProgressEpic  WarningKind = "in-progress-epic"
+	WarnDependencyCycle WarningKind = "dependency-cycle"
+	WarnSubIssuesCapped WarningKind = "sub-issues-truncated"
+	WarnBlockersCapped  WarningKind = "blockers-truncated"
 )
 
-// Warnings reports contradictions — the only per-issue conditions prime and
-// ready surface. Absences (untriaged issues) are not warnings. Order is
-// deterministic: per-issue warnings in issue-number order, then cycles,
-// then truncation notices.
-func Warnings(issues []Issue) []string {
-	var out []string
+// Warning is a structured contradiction or completeness notice. Issue names
+// the subject (0 for a cycle, which spans several); Cycle carries the member
+// path for WarnDependencyCycle; Total and Fetched carry the server-side and
+// fetched counts for the truncation kinds. Message formatting lives in the
+// render package, not here.
+type Warning struct {
+	Kind    WarningKind
+	Issue   int
+	Cycle   []int
+	Total   int
+	Fetched int
+}
+
+// Warnings reports contradictions and data-completeness notices — the
+// per-issue conditions prime and ready surface. Absences (untriaged issues)
+// are not warnings. Order is deterministic given the input order:
+// per-issue warnings first, then cycles, then truncation notices.
+func Warnings(issues []Issue) []Warning {
+	var out []Warning
 	for _, i := range issues {
 		if !i.IsOpen() {
 			continue
 		}
 		if _, multi := i.Priority(); multi {
-			out = append(out, fmt.Sprintf("#%d has multiple priority labels; highest wins", i.Number))
+			out = append(out, Warning{Kind: WarnMultiPriority, Issue: i.Number})
 		}
 		if _, multi := i.Type(); multi {
-			out = append(out, fmt.Sprintf("#%d has multiple type labels; first of %s wins", i.Number, strings.Join(Types, "|")))
+			out = append(out, Warning{Kind: WarnMultiType, Issue: i.Number})
 		}
 		if i.IsEpic() && i.InProgress() {
-			out = append(out, fmt.Sprintf("#%d is an in-progress epic; epics are never worked directly", i.Number))
+			out = append(out, Warning{Kind: WarnInProgressEpic, Issue: i.Number})
 		}
 	}
-	out = append(out, CycleWarnings(issues)...)
+	for _, cyc := range Cycles(issues) {
+		out = append(out, Warning{Kind: WarnDependencyCycle, Cycle: cyc})
+	}
 	for _, i := range issues {
 		if !i.IsOpen() {
 			continue
 		}
 		if i.SubIssuesTotal > len(i.SubIssues) {
-			out = append(out, fmt.Sprintf("#%d has %d sub-issues, only %d fetched; counts may be incomplete", i.Number, i.SubIssuesTotal, len(i.SubIssues)))
+			out = append(out, Warning{Kind: WarnSubIssuesCapped, Issue: i.Number, Total: i.SubIssuesTotal, Fetched: len(i.SubIssues)})
 		}
 		if i.BlockedByTotal > len(i.BlockedBy) {
-			out = append(out, fmt.Sprintf("#%d has %d blockers, only %d fetched; ready may be wrong", i.Number, i.BlockedByTotal, len(i.BlockedBy)))
+			out = append(out, Warning{Kind: WarnBlockersCapped, Issue: i.Number, Total: i.BlockedByTotal, Fetched: len(i.BlockedBy)})
 		}
 	}
 	return out
 }
 
-// CycleWarnings is the cycle subset of Warnings; ready emits only these.
-func CycleWarnings(issues []Issue) []string {
-	var out []string
-	for _, cyc := range Cycles(issues) {
-		out = append(out, "dependency cycle "+cyclePath(cyc)+": none will be ready")
+// WarningsOfKind returns the subset of ws matching any of kinds, preserving
+// order — each command surfaces the kinds relevant to its output.
+func WarningsOfKind(ws []Warning, kinds ...WarningKind) []Warning {
+	var out []Warning
+	for _, w := range ws {
+		if slices.Contains(kinds, w.Kind) {
+			out = append(out, w)
+		}
 	}
 	return out
-}
-
-func cyclePath(cyc []int) string {
-	parts := make([]string, len(cyc))
-	for i, n := range cyc {
-		parts[i] = "#" + strconv.Itoa(n)
-	}
-	return strings.Join(parts, " → ")
 }

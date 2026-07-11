@@ -119,16 +119,32 @@ func TestWarnings(t *testing.T) {
 	issues := []Issue{multiPri, multiType, epicInProgress, closedContradiction,
 		blocked(8, 9), blocked(9, 8), truncatedSubs, truncatedBlockers}
 	got := Warnings(issues)
-	want := []string{
-		"#1 has multiple priority labels; highest wins",
-		"#2 has multiple type labels; first of bug|enhancement|task wins",
-		"#3 is an in-progress epic; epics are never worked directly",
-		"dependency cycle #8 → #9 → #8: none will be ready",
-		"#6 has 60 sub-issues, only 50 fetched; counts may be incomplete",
-		"#7 has 25 blockers, only 1 fetched; ready may be wrong",
+	want := []Warning{
+		{Kind: WarnMultiPriority, Issue: 1},
+		{Kind: WarnMultiType, Issue: 2},
+		{Kind: WarnInProgressEpic, Issue: 3},
+		{Kind: WarnDependencyCycle, Cycle: []int{8, 9, 8}},
+		{Kind: WarnSubIssuesCapped, Issue: 6, Total: 60, Fetched: 50},
+		{Kind: WarnBlockersCapped, Issue: 7, Total: 25, Fetched: 1},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Warnings() =\n%v\nwant\n%v", got, want)
+	}
+}
+
+func TestWarningsOfKind(t *testing.T) {
+	ws := []Warning{
+		{Kind: WarnMultiPriority, Issue: 1},
+		{Kind: WarnDependencyCycle, Cycle: []int{2, 3, 2}},
+		{Kind: WarnBlockersCapped, Issue: 4, Total: 25, Fetched: 1},
+	}
+	got := WarningsOfKind(ws, WarnDependencyCycle, WarnBlockersCapped)
+	want := []Warning{
+		{Kind: WarnDependencyCycle, Cycle: []int{2, 3, 2}},
+		{Kind: WarnBlockersCapped, Issue: 4, Total: 25, Fetched: 1},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("WarningsOfKind() = %v, want %v", got, want)
 	}
 }
 

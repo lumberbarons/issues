@@ -25,8 +25,8 @@ func (a *App) Ready(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, w := range model.CycleWarnings(issues) {
-		a.warnf("%s", w)
+	for _, w := range model.WarningsOfKind(model.Warnings(issues), model.WarnDependencyCycle) {
+		a.warnf("%s", render.FormatWarning(w))
 	}
 	ready := model.Ready(issues)
 	if a.JSON {

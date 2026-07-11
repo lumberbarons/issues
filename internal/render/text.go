@@ -174,6 +174,35 @@ func EpicStatus(w io.Writer, epic model.Issue, byNumber map[int]model.Issue) {
 	}
 }
 
+// FormatCycle renders a cycle's member path as "#a → #b → … → #a".
+func FormatCycle(path []int) string {
+	parts := make([]string, len(path))
+	for i, n := range path {
+		parts[i] = "#" + strconv.Itoa(n)
+	}
+	return strings.Join(parts, " → ")
+}
+
+// FormatWarning renders a structured warning as the human sentence shown in
+// prime and ready output. It is the single place warning prose lives.
+func FormatWarning(w model.Warning) string {
+	switch w.Kind {
+	case model.WarnMultiPriority:
+		return fmt.Sprintf("#%d has multiple priority labels; highest wins", w.Issue)
+	case model.WarnMultiType:
+		return fmt.Sprintf("#%d has multiple type labels; first of %s wins", w.Issue, strings.Join(model.Types, "|"))
+	case model.WarnInProgressEpic:
+		return fmt.Sprintf("#%d is an in-progress epic; epics are never worked directly", w.Issue)
+	case model.WarnDependencyCycle:
+		return "dependency cycle " + FormatCycle(w.Cycle) + ": none will be ready"
+	case model.WarnSubIssuesCapped:
+		return fmt.Sprintf("#%d has %d sub-issues, only %d fetched; counts may be incomplete", w.Issue, w.Total, w.Fetched)
+	case model.WarnBlockersCapped:
+		return fmt.Sprintf("#%d has %d blockers, only %d fetched; ready may be wrong", w.Issue, w.Total, w.Fetched)
+	}
+	return ""
+}
+
 // PrimeData is everything the primer needs, precomputed by the command.
 type PrimeData struct {
 	Repo       string
@@ -182,7 +211,7 @@ type PrimeData struct {
 	OpenTotal  int
 	InProgress []model.Issue
 	Epics      []model.Issue
-	Warnings   []string
+	Warnings   []model.Warning
 	Untriaged  int
 }
 
@@ -214,7 +243,7 @@ func Prime(w io.Writer, static string, d PrimeData) {
 	if len(d.Warnings) > 0 {
 		fmt.Fprintln(w, "\n## Warnings")
 		for _, warn := range d.Warnings {
-			fmt.Fprintf(w, "⚠ %s\n", warn)
+			fmt.Fprintf(w, "⚠ %s\n", FormatWarning(warn))
 		}
 	}
 }
