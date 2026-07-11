@@ -192,24 +192,31 @@ typical repo.
     (pure, unit-tested)
   - `internal/render/` — text + JSON renderers (golden-file tests)
   - `internal/conventions/` — labels, body template, primer text (the opinions live here)
-- **Testing**: unit tests against a fake API layer; golden files for renderer output;
-  one integration smoke test behind a build tag that hits a real scratch repo.
+- **Testing**: unit tests against a fake API layer; golden files for renderer output.
+  An integration smoke test against a real scratch repo (behind a build tag, run
+  manually — it needs a token and mutates state, so it stays out of CI) is deferred
+  for now.
 
 ## Build & distribution
 
 - **CI** (GitHub Actions, actions pinned by SHA at their latest versions): one
   workflow triggered on PRs and pushes to `main`, running `golangci-lint` and the
-  full test suite (`go test -race -coverprofile ./...`). Go version comes from
-  `go.mod`.
+  full test suite (`go test -race -coverprofile ./...`), plus `shellcheck` on
+  `install.sh` — the one thing strangers pipe into bash gets linted like everything
+  else. Go version comes from `go.mod`.
 - **Coverage gate**: 90% minimum, blocking. Go's toolchain measures *statement*
   coverage only (line-equivalent in practice; there is no native branch coverage —
   see gobco note in open questions), enforced with `go-test-coverage` in CI.
   `cmd/` wiring is excluded so the bar bites on the logic packages
   (`internal/model`, `internal/render`, `internal/conventions`, `internal/gh`).
+- **Dependabot** keeps the SHA-pinned actions and Go modules fresh (`github-actions`
+  and `gomod` ecosystems), configured with a cooldown so new releases settle before
+  we pick them up.
 - **Releases are tag-driven**: pushing a `vX.Y.Z` tag runs goreleaser, which builds
   static binaries for linux and macOS (amd64 + arm64, CGO off), stamps the version
   into `issues --version` via ldflags, and publishes the archives plus a checksums
-  file as a GitHub Release.
+  file as a GitHub Release. Release notes come from goreleaser's changelog grouping
+  over commit prefixes (`feat:`/`fix:`/`docs:`/...), which we already write.
 - **install.sh** at the repo root, usable as
   `curl -fsSL https://raw.githubusercontent.com/lumberbarons/issues/main/install.sh | bash`:
   detects OS/arch via `uname`, resolves the latest release through the GitHub API,
