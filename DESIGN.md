@@ -123,6 +123,9 @@ issues unblock <n> --from <m>
 issues epic create --title "..." [--children N,N,N]
 issues epic status [<n>]          # progress rollup per epic
 issues init                       # bootstrap labels in a repo; print CLAUDE.md snippet
+issues hooks install|remove       # Claude Code SessionStart hook running `issues prime`
+                                  # in the project's .claude/settings.json — the hook
+                                  # variant of prime's "CLAUDE.md instruction or hook"
 ```
 
 Global flags: `--json` (structured output, stable schema), `--repo owner/name`

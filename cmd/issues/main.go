@@ -123,7 +123,7 @@ func root() *ucli.Command {
 		Commands: []*ucli.Command{
 			primeCmd(), readyCmd(), listCmd(), showCmd(), createCmd(),
 			startCmd(), triageCmd(), setCmd(), closeCmd(), blockCmd(),
-			unblockCmd(), epicCmd(), initCmd(),
+			unblockCmd(), epicCmd(), initCmd(), hooksCmd(),
 		},
 	}
 }
@@ -416,6 +416,56 @@ func epicCmd() *ucli.Command {
 						return err
 					}
 					return app.EpicStatus(ctx, n)
+				},
+			},
+		},
+	}
+}
+
+// hooksApp builds an App for the hooks commands, which touch only the
+// local filesystem: no GitHub client, no repo detection.
+func hooksApp(cmd *ucli.Command) (*appcli.App, string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil, "", err
+	}
+	root, err := appcli.FindProjectRoot(cwd)
+	if err != nil {
+		return nil, "", err
+	}
+	return &appcli.App{Out: os.Stdout, ErrOut: os.Stderr, JSON: cmd.Bool("json")}, root, nil
+}
+
+func hooksCmd() *ucli.Command {
+	jsonFlag := []ucli.Flag{
+		&ucli.BoolFlag{Name: "json", Usage: "structured output with a stable schema"},
+	}
+	return &ucli.Command{
+		Name:  "hooks",
+		Usage: "manage the Claude Code SessionStart hook that runs `issues prime`",
+		Commands: []*ucli.Command{
+			{
+				Name:  "install",
+				Usage: "add the hook to this project's .claude/settings.json",
+				Flags: jsonFlag,
+				Action: func(ctx context.Context, cmd *ucli.Command) error {
+					app, root, err := hooksApp(cmd)
+					if err != nil {
+						return err
+					}
+					return app.HooksInstall(root)
+				},
+			},
+			{
+				Name:  "remove",
+				Usage: "remove the hook again",
+				Flags: jsonFlag,
+				Action: func(ctx context.Context, cmd *ucli.Command) error {
+					app, root, err := hooksApp(cmd)
+					if err != nil {
+						return err
+					}
+					return app.HooksRemove(root)
 				},
 			},
 		},
