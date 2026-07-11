@@ -12,21 +12,20 @@
     "untriaged": false,
     "parent": null,
     "blockedBy": [],
+    "blockedByTotal": 0,
     "openBlockers": [],
-    "subIssues": [
-      120,
-      999
-    ],
+    "subIssues": [],
+    "subIssuesTotal": 2,
     "subIssuesCompleted": 1,
     "createdAt": "2026-07-05T12:00:00Z"
   },
   "children": [
     {
       "number": 120,
-      "title": "Voltgo BLE battery controller: scaffold, client, collector",
+      "title": "Open child",
       "state": "open",
-      "priority": "P2",
-      "type": "enhancement",
+      "priority": "P1",
+      "type": "bug",
       "areas": [],
       "assignees": [],
       "epic": false,
@@ -34,17 +33,19 @@
       "untriaged": false,
       "parent": null,
       "blockedBy": [],
+      "blockedByTotal": 0,
       "openBlockers": [],
       "subIssues": [],
+      "subIssuesTotal": 0,
       "subIssuesCompleted": 0,
-      "createdAt": "2026-07-01T12:00:00Z"
+      "createdAt": "2026-07-04T12:00:00Z"
     },
     {
-      "number": 999,
-      "title": "",
+      "number": 121,
+      "title": "Done child",
       "state": "closed",
-      "priority": null,
-      "type": null,
+      "priority": "P2",
+      "type": "task",
       "areas": [],
       "assignees": [],
       "epic": false,
@@ -52,10 +53,12 @@
       "untriaged": false,
       "parent": null,
       "blockedBy": [],
+      "blockedByTotal": 0,
       "openBlockers": [],
       "subIssues": [],
+      "subIssuesTotal": 0,
       "subIssuesCompleted": 0,
-      "createdAt": "0001-01-01T00:00:00Z"
+      "createdAt": "2026-07-03T12:00:00Z"
     }
   ]
 }

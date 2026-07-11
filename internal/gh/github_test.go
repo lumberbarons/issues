@@ -142,7 +142,7 @@ func TestListIssuesPaginates(t *testing.T) {
 		}
 		fmt.Fprintf(w, `{"data":{"repository":{"issues":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[%s]}}}}`, issueJSON(2, ""))
 	})
-	issues, err := f.client(t).ListIssues(context.Background(), []string{"OPEN"})
+	issues, err := f.client(t).ListIssues(context.Background(), []IssueState{StateOpen})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -257,6 +257,8 @@ func TestRemoveLabelToleratesMissing(t *testing.T) {
 
 func TestGraphQLMutations(t *testing.T) {
 	f := newFakeServer(t)
+	// The mutation APIs resolve issue numbers to node IDs first.
+	f.graphql["issue(number:"] = `{"data":{"repository":{"issue":{"id":"NODE"}}}}`
 	f.graphql["closeIssue"] = `{"data":{"closeIssue":{"clientMutationId":null}}}`
 	f.graphql["addBlockedBy"] = `{"data":{"addBlockedBy":{"clientMutationId":null}}}`
 	f.graphql["removeBlockedBy"] = `{"data":{"removeBlockedBy":{"clientMutationId":null}}}`
@@ -264,26 +266,75 @@ func TestGraphQLMutations(t *testing.T) {
 	f.graphql["removeSubIssue"] = `{"data":{"removeSubIssue":{"clientMutationId":null}}}`
 	c := f.client(t)
 	ctx := context.Background()
-	if err := c.CloseIssue(ctx, "N1", "NOT_PLANNED"); err != nil {
+	if err := c.CloseIssue(ctx, 1, CloseNotPlanned); err != nil {
 		t.Error(err)
 	}
-	if err := c.AddBlockedBy(ctx, "N1", "N2"); err != nil {
+	if err := c.AddBlockedBy(ctx, 1, 2); err != nil {
 		t.Error(err)
 	}
-	if err := c.RemoveBlockedBy(ctx, "N1", "N2"); err != nil {
+	if err := c.RemoveBlockedBy(ctx, 1, 2); err != nil {
 		t.Error(err)
 	}
-	if err := c.AddSubIssue(ctx, "N1", "N2", true); err != nil {
+	if err := c.AddSubIssue(ctx, 1, 2, true); err != nil {
 		t.Error(err)
 	}
-	if err := c.RemoveSubIssue(ctx, "N1", "N2"); err != nil {
+	if err := c.RemoveSubIssue(ctx, 1, 2); err != nil {
 		t.Error(err)
 	}
-	// The close mutation must inline the enum, not quote it.
+	// The close reason must ride in the variables as an enum value, not be
+	// interpolated into the query text.
+	var sawClose bool
 	for _, r := range f.requests {
-		if strings.Contains(r.Body, "closeIssue") && strings.Contains(r.Body, `"NOT_PLANNED"`) {
-			t.Errorf("stateReason sent as string: %s", r.Body)
+		if !strings.Contains(r.Body, "closeIssue(") {
+			continue
 		}
+		sawClose = true
+		if strings.Contains(r.Body, "stateReason: NOT_PLANNED") {
+			t.Errorf("stateReason interpolated into query: %s", r.Body)
+		}
+		if !strings.Contains(r.Body, `"reason":"NOT_PLANNED"`) {
+			t.Errorf("stateReason not sent as a variable: %s", r.Body)
+		}
+	}
+	if !sawClose {
+		t.Error("no closeIssue mutation was sent")
+	}
+}
+
+func TestMutationResolvesNodeIDAndReportsMissing(t *testing.T) {
+	f := newFakeServer(t)
+	// Node-ID resolution finds no issue: the mutation must surface not-found
+	// rather than sending a bad ID to the mutation.
+	f.graphql["issue(number:"] = `{"data":{"repository":{"issue":null}}}`
+	err := f.client(t).CloseIssue(context.Background(), 404, CloseCompleted)
+	if err == nil || !strings.Contains(err.Error(), "#404 not found") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestNodeIDResolutionIsMemoized(t *testing.T) {
+	f := newFakeServer(t)
+	f.graphql["issue(number:"] = `{"data":{"repository":{"issue":{"id":"NODE"}}}}`
+	f.graphql["addBlockedBy"] = `{"data":{"addBlockedBy":{"clientMutationId":null}}}`
+	f.graphql["removeBlockedBy"] = `{"data":{"removeBlockedBy":{"clientMutationId":null}}}`
+	c := f.client(t)
+	ctx := context.Background()
+	// Two mutations over the same pair need four node IDs but only two
+	// distinct issues; each issue must be resolved once, not per edge.
+	if err := c.AddBlockedBy(ctx, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RemoveBlockedBy(ctx, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	resolutions := 0
+	for _, r := range f.requests {
+		if strings.Contains(r.Body, "issue(number:") {
+			resolutions++
+		}
+	}
+	if resolutions != 2 {
+		t.Errorf("node-ID resolutions = %d, want 2 (one per distinct issue)", resolutions)
 	}
 }
 
@@ -307,6 +358,20 @@ func TestGetIssueGraphQLNotResolve(t *testing.T) {
 	_, err := f.client(t).GetIssue(context.Background(), 404)
 	if err == nil || !strings.Contains(err.Error(), "#404 not found in o/r") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestGetIssueRepositoryNotFound(t *testing.T) {
+	f := newFakeServer(t)
+	// A missing/inaccessible repo fails to resolve at the repository path,
+	// not the issue path — the message must blame the repo, not the issue.
+	f.graphql["issue(number:"] = `{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],"message":"Could not resolve to a Repository with the name 'o/r'."}]}`
+	_, err := f.client(t).GetIssue(context.Background(), 5)
+	if err == nil || !strings.Contains(err.Error(), "repository o/r not found") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "issue #5") {
+		t.Fatalf("repository error misreported as missing issue: %v", err)
 	}
 }
 

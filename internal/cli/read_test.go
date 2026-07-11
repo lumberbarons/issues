@@ -56,6 +56,23 @@ func TestReadyWarnsOnCycle(t *testing.T) {
 	}
 }
 
+func TestReadyWarnsOnTruncatedBlockers(t *testing.T) {
+	// The fetched blocker is closed (so #1 looks ready), but the server says
+	// there are more blockers than were fetched — ready may be wrong, and the
+	// command must say so.
+	a := issue(1, "A", "P2", "bug")
+	a.BlockedBy = []model.Ref{{Number: 2, State: "CLOSED"}}
+	a.BlockedByTotal = 25
+	f := newFake(a)
+	app, _, errOut := newApp(f)
+	if err := app.Ready(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut.String(), "#1 has 25 blockers, only 1 fetched") {
+		t.Errorf("stderr = %q", errOut.String())
+	}
+}
+
 func TestReadyJSON(t *testing.T) {
 	f := newFake(issue(1, "Work", "P2", "bug"))
 	app, out, _ := newApp(f)
@@ -73,6 +90,42 @@ func TestReadyJSON(t *testing.T) {
 	}
 	if got["number"].(float64) != 1 || got["priority"] != "P2" {
 		t.Errorf("JSON = %s", out.String())
+	}
+}
+
+func TestJSONFramingIsConsistent(t *testing.T) {
+	// The contract: a collection is NDJSON (one object per line); a single
+	// issue is one object. Lock both so neither drifts to the other's shape.
+	f := newFake(issue(1, "One", "P2", "bug"), issue(2, "Two", "P1", "bug"))
+
+	listApp, listOut, _ := newApp(f)
+	listApp.JSON = true
+	if err := listApp.List(ctx, ListOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(listOut.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("list --json should be 2 NDJSON lines, got %d:\n%s", len(lines), listOut.String())
+	}
+	for _, ln := range lines {
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(ln), &obj); err != nil {
+			t.Fatalf("list line is not a JSON object: %v\n%s", err, ln)
+		}
+	}
+
+	showApp, showOut, _ := newApp(f)
+	showApp.JSON = true
+	if err := showApp.Show(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	// A single object parses whole and is not line-delimited NDJSON.
+	var one map[string]any
+	if err := json.Unmarshal(showOut.Bytes(), &one); err != nil {
+		t.Fatalf("show --json should be one JSON object: %v\n%s", err, showOut.String())
+	}
+	if one["number"].(float64) != 1 {
+		t.Errorf("show --json = %s", showOut.String())
 	}
 }
 
@@ -325,6 +378,27 @@ func TestEpicStatusOne(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("EpicStatus missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestEpicStatusUsesBacklinksNotCappedSubIssues(t *testing.T) {
+	// The epic's sub-issue connection was capped: it lists only #11, but the
+	// server total is higher. #12 reaches the view via its parent backlink,
+	// not the (incomplete) SubIssues refs.
+	epicIssue := issue(10, "Epic: big", "P2")
+	epicIssue.SubIssues = []model.Ref{{Number: 11, State: "OPEN"}}
+	epicIssue.SubIssuesTotal = 2
+	child := issue(11, "Child", "P2", "task")
+	child.Parent = &model.Ref{Number: 10, State: "OPEN"}
+	missing := issue(12, "Uncapped child", "P2", "task")
+	missing.Parent = &model.Ref{Number: 10, State: "OPEN"}
+	f := newFake(epicIssue, child, missing)
+	app, out, _ := newApp(f)
+	if err := app.EpicStatus(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "#12") {
+		t.Errorf("child absent from capped SubIssues was dropped:\n%s", out.String())
 	}
 }
 

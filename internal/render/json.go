@@ -24,12 +24,15 @@ type IssueJSON struct {
 	Untriaged          bool          `json:"untriaged"`
 	Parent             *int          `json:"parent"`
 	BlockedBy          []int         `json:"blockedBy"`
+	BlockedByTotal     int           `json:"blockedByTotal"`
 	OpenBlockers       []int         `json:"openBlockers"`
 	SubIssues          []int         `json:"subIssues"`
+	SubIssuesTotal     int           `json:"subIssuesTotal"`
 	SubIssuesCompleted int           `json:"subIssuesCompleted"`
 	CreatedAt          time.Time     `json:"createdAt"`
 	Body               string        `json:"body,omitempty"`
 	Comments           []CommentJSON `json:"comments,omitempty"`
+	CommentsTotal      int           `json:"commentsTotal,omitempty"`
 }
 
 // CommentJSON is one recent comment in show --json.
@@ -52,8 +55,10 @@ func ToJSON(i model.Issue, withDetail bool) IssueJSON {
 		InProgress:         i.InProgress(),
 		Untriaged:          i.Untriaged(),
 		BlockedBy:          refNumbers(i.BlockedBy),
+		BlockedByTotal:     i.BlockedByTotal,
 		OpenBlockers:       emptyIntNotNull(i.OpenBlockers()),
 		SubIssues:          refNumbers(i.SubIssues),
+		SubIssuesTotal:     i.SubIssuesTotal,
 		SubIssuesCompleted: i.SubIssuesCompleted,
 		CreatedAt:          i.CreatedAt,
 	}
@@ -70,6 +75,7 @@ func ToJSON(i model.Issue, withDetail bool) IssueJSON {
 	}
 	if withDetail {
 		out.Body = i.Body
+		out.CommentsTotal = i.CommentsTotal
 		for _, c := range i.Comments {
 			out.Comments = append(out.Comments, CommentJSON{Author: c.Author, CreatedAt: c.CreatedAt, Body: c.Body})
 		}
@@ -95,16 +101,45 @@ func JSONIssue(w io.Writer, i model.Issue) error {
 	return writeJSON(w, ToJSON(i, true))
 }
 
+// WarningJSON is one structured warning: a machine-readable kind plus the
+// numbers involved, alongside the rendered human message. Consumers branch
+// on kind rather than parsing message prose.
+type WarningJSON struct {
+	Kind    string `json:"kind"`
+	Issue   int    `json:"issue,omitempty"`
+	Cycle   []int  `json:"cycle,omitempty"`
+	Total   int    `json:"total,omitempty"`
+	Fetched int    `json:"fetched,omitempty"`
+	Message string `json:"message"`
+}
+
 // PrimeJSON is the structured form of the primer's live state.
 type PrimeJSON struct {
-	Repo       string      `json:"repo"`
-	OpenTotal  int         `json:"openTotal"`
-	ReadyTotal int         `json:"readyTotal"`
-	Ready      []IssueJSON `json:"ready"`
-	InProgress []IssueJSON `json:"inProgress"`
-	Epics      []IssueJSON `json:"epics"`
-	Untriaged  int         `json:"untriaged"`
-	Warnings   []string    `json:"warnings"`
+	Repo       string        `json:"repo"`
+	OpenTotal  int           `json:"openTotal"`
+	ReadyTotal int           `json:"readyTotal"`
+	Ready      []IssueJSON   `json:"ready"`
+	InProgress []IssueJSON   `json:"inProgress"`
+	Epics      []IssueJSON   `json:"epics"`
+	Untriaged  int           `json:"untriaged"`
+	Warnings   []WarningJSON `json:"warnings"`
+}
+
+// warningsJSON maps structured warnings to their JSON form, attaching the
+// rendered message so both machine and human consumers are served.
+func warningsJSON(ws []model.Warning) []WarningJSON {
+	out := make([]WarningJSON, 0, len(ws))
+	for _, w := range ws {
+		out = append(out, WarningJSON{
+			Kind:    string(w.Kind),
+			Issue:   w.Issue,
+			Cycle:   w.Cycle,
+			Total:   w.Total,
+			Fetched: w.Fetched,
+			Message: FormatWarning(w),
+		})
+	}
+	return out
 }
 
 // JSONPrime writes the primer's live state as JSON (the static primer text
@@ -118,7 +153,7 @@ func JSONPrime(w io.Writer, d PrimeData) error {
 		InProgress: toJSONList(d.InProgress),
 		Epics:      toJSONList(d.Epics),
 		Untriaged:  d.Untriaged,
-		Warnings:   emptyNotNull(d.Warnings),
+		Warnings:   warningsJSON(d.Warnings),
 	}
 	return writeJSON(w, out)
 }
@@ -129,20 +164,14 @@ type EpicStatusJSON struct {
 	Children []IssueJSON `json:"children"`
 }
 
-// JSONEpicStatus writes one epic and its children, resolving each child
-// from the fetched set where possible.
-func JSONEpicStatus(w io.Writer, epic model.Issue, byNumber map[int]model.Issue) error {
+// JSONEpicStatus writes one epic and its children. Children are the epic's
+// full parent-backlinked set, so every entry is a real fetched issue — no
+// fabricated placeholders — and the list is complete even when the epic's
+// sub-issue connection was capped.
+func JSONEpicStatus(w io.Writer, epic model.Issue, children []model.Issue) error {
 	out := EpicStatusJSON{Epic: ToJSON(epic, false), Children: []IssueJSON{}}
-	for _, ref := range epic.SubIssues {
-		if child, ok := byNumber[ref.Number]; ok {
-			out.Children = append(out.Children, ToJSON(child, false))
-		} else {
-			out.Children = append(out.Children, IssueJSON{
-				Number: ref.Number, State: strings.ToLower(ref.State),
-				Areas: []string{}, Assignees: []string{},
-				BlockedBy: []int{}, OpenBlockers: []int{}, SubIssues: []int{},
-			})
-		}
+	for _, child := range children {
+		out.Children = append(out.Children, ToJSON(child, false))
 	}
 	return writeJSON(w, out)
 }

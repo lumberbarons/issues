@@ -50,7 +50,7 @@ func annotations(i model.Issue) string {
 		}
 		parts = append(parts, "blocked by "+strings.Join(refs, " "))
 	}
-	if i.InProgress() || len(i.Assignees) > 0 {
+	if i.Claimed() {
 		claim := "in progress"
 		if len(i.Assignees) > 0 {
 			claim += " @" + strings.Join(i.Assignees, " @")
@@ -139,7 +139,11 @@ func Show(w io.Writer, i model.Issue) {
 	}
 	if len(i.Comments) > 0 {
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, "comments:")
+		header := "comments:"
+		if i.CommentsTotal > len(i.Comments) {
+			header = fmt.Sprintf("comments (showing last %d of %d):", len(i.Comments), i.CommentsTotal)
+		}
+		fmt.Fprintln(w, header)
 		for _, c := range i.Comments {
 			fmt.Fprintf(w, "  @%s (%s): %s\n", c.Author, c.CreatedAt.Format("2006-01-02"), strings.TrimSpace(c.Body))
 		}
@@ -150,28 +154,54 @@ func refList(refs []model.Ref) string {
 	parts := make([]string, len(refs))
 	for idx, r := range refs {
 		parts[idx] = fmt.Sprintf("#%d", r.Number)
-		if r.State == "CLOSED" {
+		if !r.IsOpen() {
 			parts[idx] += " (closed)"
 		}
 	}
 	return strings.Join(parts, ", ")
 }
 
-// EpicStatus renders one epic with its children, using the full issue set
-// to resolve child titles.
-func EpicStatus(w io.Writer, epic model.Issue, byNumber map[int]model.Issue) {
+// EpicStatus renders one epic and its children. Children are the epic's
+// full parent-backlinked set (complete even when the sub-issue connection
+// was capped); the rollup line keeps the server-side completed/total.
+func EpicStatus(w io.Writer, epic model.Issue, children []model.Issue) {
 	fmt.Fprintf(w, "%s  %d/%d\n", Line(epic), epic.SubIssuesCompleted, epic.SubIssuesTotal)
-	for _, ref := range epic.SubIssues {
+	for _, child := range children {
 		mark := "○"
-		if ref.State == "CLOSED" {
+		if !child.IsOpen() {
 			mark = "✓"
 		}
-		if child, ok := byNumber[ref.Number]; ok {
-			fmt.Fprintf(w, "  %s #%d %s  %s\n", mark, child.Number, meta(child), child.Title)
-		} else {
-			fmt.Fprintf(w, "  %s #%d\n", mark, ref.Number)
-		}
+		fmt.Fprintf(w, "  %s #%d %s  %s\n", mark, child.Number, meta(child), child.Title)
 	}
+}
+
+// FormatCycle renders a cycle's member path as "#a → #b → … → #a".
+func FormatCycle(path []int) string {
+	parts := make([]string, len(path))
+	for i, n := range path {
+		parts[i] = "#" + strconv.Itoa(n)
+	}
+	return strings.Join(parts, " → ")
+}
+
+// FormatWarning renders a structured warning as the human sentence shown in
+// prime and ready output. It is the single place warning prose lives.
+func FormatWarning(w model.Warning) string {
+	switch w.Kind {
+	case model.WarnMultiPriority:
+		return fmt.Sprintf("#%d has multiple priority labels; highest wins", w.Issue)
+	case model.WarnMultiType:
+		return fmt.Sprintf("#%d has multiple type labels; first of %s wins", w.Issue, strings.Join(model.Types, "|"))
+	case model.WarnInProgressEpic:
+		return fmt.Sprintf("#%d is an in-progress epic; epics are never worked directly", w.Issue)
+	case model.WarnDependencyCycle:
+		return "dependency cycle " + FormatCycle(w.Cycle) + ": none will be ready"
+	case model.WarnSubIssuesCapped:
+		return fmt.Sprintf("#%d has %d sub-issues, only %d fetched; counts may be incomplete", w.Issue, w.Total, w.Fetched)
+	case model.WarnBlockersCapped:
+		return fmt.Sprintf("#%d has %d blockers, only %d fetched; ready may be wrong", w.Issue, w.Total, w.Fetched)
+	}
+	return ""
 }
 
 // PrimeData is everything the primer needs, precomputed by the command.
@@ -182,7 +212,7 @@ type PrimeData struct {
 	OpenTotal  int
 	InProgress []model.Issue
 	Epics      []model.Issue
-	Warnings   []string
+	Warnings   []model.Warning
 	Untriaged  int
 }
 
@@ -214,7 +244,7 @@ func Prime(w io.Writer, static string, d PrimeData) {
 	if len(d.Warnings) > 0 {
 		fmt.Fprintln(w, "\n## Warnings")
 		for _, warn := range d.Warnings {
-			fmt.Fprintf(w, "⚠ %s\n", warn)
+			fmt.Fprintf(w, "⚠ %s\n", FormatWarning(warn))
 		}
 	}
 }

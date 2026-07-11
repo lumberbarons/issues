@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -31,6 +30,10 @@ type GitHub struct {
 	repo Repo
 	gql  *api.GraphQLClient
 	rest *api.RESTClient
+	// nodeIDs memoizes issue number → GraphQL node ID for this repo. Node
+	// IDs are immutable, so entries never invalidate. Not synchronized: a
+	// client serves one CLI command on one goroutine.
+	nodeIDs map[int]string
 }
 
 // New builds a client using gh's stored credentials and host config.
@@ -48,7 +51,7 @@ func NewWithOptions(repo Repo, opts api.ClientOptions) (*GitHub, error) {
 	if err != nil {
 		return nil, &AuthError{Err: err}
 	}
-	return &GitHub{repo: repo, gql: gql, rest: rest}, nil
+	return &GitHub{repo: repo, gql: gql, rest: rest, nodeIDs: map[int]string{}}, nil
 }
 
 func (g *GitHub) Viewer(ctx context.Context) (string, error) {
@@ -110,7 +113,8 @@ type issueNode struct {
 		Nodes      []refNode `json:"nodes"`
 	} `json:"blockedBy"`
 	Comments struct {
-		Nodes []struct {
+		TotalCount int `json:"totalCount"`
+		Nodes      []struct {
 			Author *struct {
 				Login string `json:"login"`
 			} `json:"author"`
@@ -137,6 +141,7 @@ func (n issueNode) toModel() model.Issue {
 		SubIssuesTotal:     n.SubIssues.TotalCount,
 		SubIssuesCompleted: n.SubIssuesSummary.Completed,
 		BlockedByTotal:     n.BlockedBy.TotalCount,
+		CommentsTotal:      n.Comments.TotalCount,
 	}
 	for _, l := range n.Labels.Nodes {
 		i.Labels = append(i.Labels, l.Name)
@@ -164,7 +169,7 @@ func (n issueNode) toModel() model.Issue {
 	return i
 }
 
-func (g *GitHub) ListIssues(ctx context.Context, states []string) ([]model.Issue, error) {
+func (g *GitHub) ListIssues(ctx context.Context, states []IssueState) ([]model.Issue, error) {
 	query := fmt.Sprintf(`
 	query($owner: String!, $name: String!, $states: [IssueState!], $cursor: String) {
 		repository(owner: $owner, name: $name) {
@@ -215,7 +220,7 @@ func (g *GitHub) GetIssue(ctx context.Context, number int) (model.Issue, error) 
 		repository(owner: $owner, name: $name) {
 			issue(number: $number) {%s
 				body
-				comments(last: %d) { nodes { author { login } createdAt body } }
+				comments(last: %d) { totalCount nodes { author { login } createdAt body } }
 			}
 		}
 	}`, issueFields, commentCap)
@@ -227,9 +232,8 @@ func (g *GitHub) GetIssue(ctx context.Context, number int) (model.Issue, error) 
 	}
 	vars := map[string]any{"owner": g.repo.Owner, "name": g.repo.Name, "number": number}
 	if err := g.gql.DoWithContext(ctx, query, vars, &resp); err != nil {
-		var gqlErr *api.GraphQLError
-		if errors.As(err, &gqlErr) && strings.Contains(err.Error(), "Could not resolve") {
-			return model.Issue{}, fmt.Errorf("issue #%d not found in %s", number, g.repo)
+		if nf := g.notFoundError(err, number); nf != nil {
+			return model.Issue{}, nf
 		}
 		return model.Issue{}, wrapErr(err)
 	}
@@ -237,6 +241,36 @@ func (g *GitHub) GetIssue(ctx context.Context, number int) (model.Issue, error) 
 		return model.Issue{}, fmt.Errorf("issue #%d not found in %s", number, g.repo)
 	}
 	return resp.Repository.Issue.toModel(), nil
+}
+
+// notFoundError classifies a GraphQL NOT_FOUND error by the field it points
+// at, so a bad --repo reports the repository as the problem rather than
+// blaming a missing issue. It returns nil when err isn't a NOT_FOUND we
+// recognise, leaving the caller to fall back to wrapErr. Classification is
+// on the structured Type/Path fields, not the server's prose, so a
+// GitHub-side rewording can't silently break it.
+func (g *GitHub) notFoundError(err error, number int) error {
+	var gqlErr *api.GraphQLError
+	if !errors.As(err, &gqlErr) {
+		return nil
+	}
+	for _, e := range gqlErr.Errors {
+		if e.Type != "NOT_FOUND" {
+			continue
+		}
+		// The repository node fails to resolve at path ["repository"];
+		// a missing issue fails deeper, at ["repository", "issue"].
+		if len(e.Path) == 1 && pathSegment(e.Path[0]) == "repository" {
+			return fmt.Errorf("repository %s not found or not accessible", g.repo)
+		}
+		return fmt.Errorf("issue #%d not found in %s", number, g.repo)
+	}
+	return nil
+}
+
+func pathSegment(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 func (g *GitHub) CreateIssue(ctx context.Context, title, body string, labels []string) (model.Issue, error) {
@@ -285,32 +319,91 @@ func (g *GitHub) Comment(ctx context.Context, number int, body string) error {
 	return g.restDo(ctx, "POST", g.issuePath(number, "/comments"), map[string]any{"body": body}, nil)
 }
 
-func (g *GitHub) CloseIssue(ctx context.Context, issueID, reason string) error {
-	query := fmt.Sprintf(`
-	mutation($id: ID!) {
-		closeIssue(input: {issueId: $id, stateReason: %s}) { clientMutationId }
-	}`, reason)
-	return wrapErr(g.gql.DoWithContext(ctx, query, map[string]any{"id": issueID}, &struct{}{}))
+// nodeID resolves an issue number to its GraphQL node ID, which the mutation
+// APIs need. It lets callers work purely in issue numbers. A missing issue or
+// repository is classified the same way GetIssue does. Resolutions are
+// memoized, so a command that mutates several edges sharing an endpoint
+// (e.g. migrate wiring one parent to many children) pays one lookup per
+// distinct issue, not per edge.
+func (g *GitHub) nodeID(ctx context.Context, number int) (string, error) {
+	if id, ok := g.nodeIDs[number]; ok {
+		return id, nil
+	}
+	query := `
+	query($owner: String!, $name: String!, $number: Int!) {
+		repository(owner: $owner, name: $name) { issue(number: $number) { id } }
+	}`
+	var resp struct {
+		Repository struct {
+			Issue *struct {
+				ID string `json:"id"`
+			} `json:"issue"`
+		} `json:"repository"`
+	}
+	vars := map[string]any{"owner": g.repo.Owner, "name": g.repo.Name, "number": number}
+	if err := g.gql.DoWithContext(ctx, query, vars, &resp); err != nil {
+		if nf := g.notFoundError(err, number); nf != nil {
+			return "", nf
+		}
+		return "", wrapErr(err)
+	}
+	if resp.Repository.Issue == nil {
+		return "", fmt.Errorf("issue #%d not found in %s", number, g.repo)
+	}
+	g.nodeIDs[number] = resp.Repository.Issue.ID
+	return resp.Repository.Issue.ID, nil
 }
 
-func (g *GitHub) AddBlockedBy(ctx context.Context, issueID, blockingIssueID string) error {
-	return g.dependencyMutation(ctx, "addBlockedBy", issueID, blockingIssueID)
+func (g *GitHub) CloseIssue(ctx context.Context, number int, reason CloseReason) error {
+	id, err := g.nodeID(ctx, number)
+	if err != nil {
+		return err
+	}
+	// The reason is passed as a typed GraphQL variable, not interpolated into
+	// the query, so a bad value is a validation error naming the field rather
+	// than an opaque parse error.
+	query := `
+	mutation($id: ID!, $reason: IssueClosedStateReason!) {
+		closeIssue(input: {issueId: $id, stateReason: $reason}) { clientMutationId }
+	}`
+	vars := map[string]any{"id": id, "reason": string(reason)}
+	return wrapErr(g.gql.DoWithContext(ctx, query, vars, &struct{}{}))
 }
 
-func (g *GitHub) RemoveBlockedBy(ctx context.Context, issueID, blockingIssueID string) error {
-	return g.dependencyMutation(ctx, "removeBlockedBy", issueID, blockingIssueID)
+func (g *GitHub) AddBlockedBy(ctx context.Context, number, blockingNumber int) error {
+	return g.dependencyMutation(ctx, "addBlockedBy", number, blockingNumber)
 }
 
-func (g *GitHub) dependencyMutation(ctx context.Context, name, issueID, blockingIssueID string) error {
+func (g *GitHub) RemoveBlockedBy(ctx context.Context, number, blockingNumber int) error {
+	return g.dependencyMutation(ctx, "removeBlockedBy", number, blockingNumber)
+}
+
+func (g *GitHub) dependencyMutation(ctx context.Context, name string, number, blockingNumber int) error {
+	id, err := g.nodeID(ctx, number)
+	if err != nil {
+		return err
+	}
+	blockingID, err := g.nodeID(ctx, blockingNumber)
+	if err != nil {
+		return err
+	}
 	query := fmt.Sprintf(`
 	mutation($id: ID!, $blocking: ID!) {
 		%s(input: {issueId: $id, blockingIssueId: $blocking}) { clientMutationId }
 	}`, name)
-	vars := map[string]any{"id": issueID, "blocking": blockingIssueID}
+	vars := map[string]any{"id": id, "blocking": blockingID}
 	return wrapErr(g.gql.DoWithContext(ctx, query, vars, &struct{}{}))
 }
 
-func (g *GitHub) AddSubIssue(ctx context.Context, parentID, childID string, replaceParent bool) error {
+func (g *GitHub) AddSubIssue(ctx context.Context, parentNumber, childNumber int, replaceParent bool) error {
+	parentID, err := g.nodeID(ctx, parentNumber)
+	if err != nil {
+		return err
+	}
+	childID, err := g.nodeID(ctx, childNumber)
+	if err != nil {
+		return err
+	}
 	query := `
 	mutation($parent: ID!, $child: ID!, $replace: Boolean) {
 		addSubIssue(input: {issueId: $parent, subIssueId: $child, replaceParent: $replace}) { clientMutationId }
@@ -319,7 +412,15 @@ func (g *GitHub) AddSubIssue(ctx context.Context, parentID, childID string, repl
 	return wrapErr(g.gql.DoWithContext(ctx, query, vars, &struct{}{}))
 }
 
-func (g *GitHub) RemoveSubIssue(ctx context.Context, parentID, childID string) error {
+func (g *GitHub) RemoveSubIssue(ctx context.Context, parentNumber, childNumber int) error {
+	parentID, err := g.nodeID(ctx, parentNumber)
+	if err != nil {
+		return err
+	}
+	childID, err := g.nodeID(ctx, childNumber)
+	if err != nil {
+		return err
+	}
 	query := `
 	mutation($parent: ID!, $child: ID!) {
 		removeSubIssue(input: {issueId: $parent, subIssueId: $child}) { clientMutationId }

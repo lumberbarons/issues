@@ -12,7 +12,6 @@ import (
 	"github.com/lumberbarons/issues/internal/conventions"
 	"github.com/lumberbarons/issues/internal/gh"
 	"github.com/lumberbarons/issues/internal/model"
-	"github.com/lumberbarons/issues/internal/render"
 )
 
 // MigrateOpts configure the beads migration.
@@ -100,19 +99,17 @@ func (a *App) MigrateBeads(ctx context.Context, opts MigrateOpts) error {
 	wired, warned := a.migrateWire(ctx, selected, state, opts)
 	closed := a.migrateClose(ctx, selected, state, opts)
 
-	if a.JSON {
-		return render.WriteJSON(a.Out, map[string]any{
-			"created": created, "wired": wired, "closed": closed,
-			"skippedClosed": skippedClosed, "warnings": warned,
-			"mapping": state,
-		})
-	}
-	a.printf("migrated %d beads: %d created, %d dependencies wired, %d closed", len(selected), created, wired, closed)
-	if skippedClosed > 0 {
-		a.printf(" (%d closed beads skipped; use --include-closed)", skippedClosed)
-	}
-	a.printf("\nmapping saved to %s\n", opts.StatePath)
-	return nil
+	return a.emitResult(map[string]any{
+		"created": created, "wired": wired, "closed": closed,
+		"skippedClosed": skippedClosed, "warnings": warned,
+		"mapping": state,
+	}, func() {
+		a.printf("migrated %d beads: %d created, %d dependencies wired, %d closed", len(selected), created, wired, closed)
+		if skippedClosed > 0 {
+			a.printf(" (%d closed beads skipped; use --include-closed)", skippedClosed)
+		}
+		a.printf("\nmapping saved to %s\n", opts.StatePath)
+	})
 }
 
 // migrationPlan prints what a real run would do.
@@ -240,24 +237,12 @@ func (a *App) migrateCreate(ctx context.Context, selected []beads.Bead, state ma
 // migrateWire connects parents and blockers. Failures warn and continue —
 // on resume the edges are retried, and a duplicate edge is harmless.
 func (a *App) migrateWire(ctx context.Context, selected []beads.Bead, state map[string]int, opts MigrateOpts) (wired int, warnings []string) {
-	ids := map[int]string{} // issue number -> node ID, fetched lazily
-	nodeID := func(number int) (string, error) {
-		if id, ok := ids[number]; ok {
-			return id, nil
-		}
-		issue, err := a.Client.GetIssue(ctx, number)
-		if err != nil {
-			return "", err
-		}
-		ids[number] = issue.ID
-		return issue.ID, nil
-	}
 	warn := func(format string, args ...any) {
 		msg := fmt.Sprintf(format, args...)
 		warnings = append(warnings, msg)
 		a.warnf("%s", msg)
 	}
-	edge := func(fromBead, toBead, kind string, connect func(fromID, toID string) error) {
+	edge := func(fromBead, toBead, kind string, connect func(from, to int) error) {
 		from, ok := state[fromBead]
 		if !ok {
 			return
@@ -267,14 +252,7 @@ func (a *App) migrateWire(ctx context.Context, selected []beads.Bead, state map[
 			warn("%s of %s not migrated, %s edge dropped", toBead, fromBead, kind)
 			return
 		}
-		fromID, err := nodeID(from)
-		if err == nil {
-			var toID string
-			if toID, err = nodeID(to); err == nil {
-				err = connect(fromID, toID)
-			}
-		}
-		if err != nil {
+		if err := connect(from, to); err != nil {
 			warn("%s edge #%d→#%d: %v", kind, from, to, err)
 			return
 		}
@@ -283,13 +261,13 @@ func (a *App) migrateWire(ctx context.Context, selected []beads.Bead, state map[
 	}
 	for _, b := range selected {
 		if p := b.Parent(); p != "" {
-			edge(b.ID, p, "parent", func(childID, parentID string) error {
-				return a.Client.AddSubIssue(ctx, parentID, childID, true)
+			edge(b.ID, p, "parent", func(child, parent int) error {
+				return a.Client.AddSubIssue(ctx, parent, child, true)
 			})
 		}
 		for _, blocker := range b.BlockedBy() {
-			edge(b.ID, blocker, "blocked-by", func(issueID, blockerID string) error {
-				return a.Client.AddBlockedBy(ctx, issueID, blockerID)
+			edge(b.ID, blocker, "blocked-by", func(issue, blocker int) error {
+				return a.Client.AddBlockedBy(ctx, issue, blocker)
 			})
 		}
 	}
@@ -321,7 +299,7 @@ func (a *App) migrateClose(ctx context.Context, selected []beads.Bead, state map
 				a.warnf("close comment on #%d: %v", number, err)
 			}
 		}
-		if err := a.Client.CloseIssue(ctx, issue.ID, "COMPLETED"); err != nil {
+		if err := a.Client.CloseIssue(ctx, number, gh.CloseCompleted); err != nil {
 			a.warnf("closing #%d: %v", number, err)
 			continue
 		}

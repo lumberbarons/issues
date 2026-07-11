@@ -34,6 +34,30 @@ func TestLabelsCoverConventionSet(t *testing.T) {
 	}
 }
 
+func TestLabelStylesCoverVocabulary(t *testing.T) {
+	// Every name model defines must appear in the bootstrap set with
+	// cosmetics attached; adding a priority or type in model without a style
+	// here must fail rather than silently ship a blank label.
+	byName := map[string]Label{}
+	for _, l := range Labels {
+		byName[l.Name] = l
+	}
+	for _, name := range model.LabelVocabulary() {
+		l, ok := byName[name]
+		if !ok {
+			t.Errorf("vocabulary name %q has no bootstrap label", name)
+			continue
+		}
+		if l.Color == "" || l.Description == "" {
+			t.Errorf("vocabulary name %q has no color/description style", name)
+		}
+	}
+	if len(Labels) != len(model.LabelVocabulary()) {
+		t.Errorf("Labels has %d entries, vocabulary has %d — a style exists for a name model doesn't define",
+			len(Labels), len(model.LabelVocabulary()))
+	}
+}
+
 func TestTemplateSections(t *testing.T) {
 	bug := TemplateSections("bug")
 	if bug[1] != "### Problem" || bug[2] != "### Fix" {

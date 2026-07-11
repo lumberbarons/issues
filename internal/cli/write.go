@@ -61,20 +61,12 @@ func (a *App) Create(ctx context.Context, opts CreateOpts) error {
 	// A brand-new issue has no dependents, so --blocked-by can't create a
 	// cycle; no transitive check needed on this path.
 	for _, blocker := range opts.BlockedBy {
-		blockerIssue, err := a.Client.GetIssue(ctx, blocker)
-		if err != nil {
-			return fmt.Errorf("created #%d but --blocked-by %d failed: %w", created.Number, blocker, err)
-		}
-		if err := a.Client.AddBlockedBy(ctx, created.ID, blockerIssue.ID); err != nil {
+		if err := a.Client.AddBlockedBy(ctx, created.Number, blocker); err != nil {
 			return fmt.Errorf("created #%d but --blocked-by %d failed: %w", created.Number, blocker, err)
 		}
 	}
 	if opts.Parent > 0 {
-		parent, err := a.Client.GetIssue(ctx, opts.Parent)
-		if err != nil {
-			return fmt.Errorf("created #%d but --parent %d failed: %w", created.Number, opts.Parent, err)
-		}
-		if err := a.Client.AddSubIssue(ctx, parent.ID, created.ID, false); err != nil {
+		if err := a.Client.AddSubIssue(ctx, opts.Parent, created.Number, false); err != nil {
 			return fmt.Errorf("created #%d but --parent %d failed: %w", created.Number, opts.Parent, err)
 		}
 	}
@@ -173,11 +165,7 @@ func (a *App) Start(ctx context.Context, number int, priorityFlag string, force 
 	if len(after.Assignees) != 1 || after.Assignees[0] != viewer {
 		a.warnf("claim may have raced: #%d now assigned to @%s", number, strings.Join(after.Assignees, " @"))
 	}
-	if a.JSON {
-		return render.JSONIssue(a.Out, after)
-	}
-	a.printf("started #%d: %s\n", number, issue.Title)
-	return nil
+	return a.emitMutation(after, "started #%d: %s\n", number, issue.Title)
 }
 
 // SetOpts are the retriage/edit inputs; zero values mean "leave alone".
@@ -205,58 +193,68 @@ func (a *App) Set(ctx context.Context, number int, opts SetOpts) error {
 	if opts.Parent > 0 && opts.NoParent {
 		return usageErr("--parent and --no-parent are mutually exclusive")
 	}
-	issue, err := a.Client.GetIssue(ctx, number)
-	if err != nil {
-		return err
-	}
+	// Validate every flag up front: Set applies several mutations in
+	// sequence, so a usage error discovered mid-way would exit 2 ("nothing
+	// happened") after earlier changes had already been written.
+	var priority model.Priority
 	if opts.Priority != "" {
 		p, ok := model.ParsePriority(opts.Priority)
 		if !ok {
 			return usageErr("--priority must be P0..P4")
 		}
-		if err := a.swapPriority(ctx, issue, p); err != nil {
+		priority = p
+	}
+	if opts.Type != "" && !model.IsType(opts.Type) {
+		return usageErr("--type must be one of %s", strings.Join(model.Types, "|"))
+	}
+	issue, err := a.Client.GetIssue(ctx, number)
+	if err != nil {
+		return err
+	}
+
+	// Track applied changes so a later failure reports what already landed
+	// rather than looking like a clean no-op.
+	var applied []string
+	step := func(name string, err error) error {
+		if err == nil {
+			applied = append(applied, name)
+			return nil
+		}
+		if len(applied) == 0 {
+			return err
+		}
+		return fmt.Errorf("#%d partially updated (applied %s); %s failed: %w",
+			number, strings.Join(applied, ", "), name, err)
+	}
+
+	if opts.Priority != "" {
+		if err := step("priority", a.swapPriority(ctx, issue, priority)); err != nil {
 			return err
 		}
 	}
 	if opts.Type != "" {
-		if !model.IsType(opts.Type) {
-			return usageErr("--type must be one of %s", strings.Join(model.Types, "|"))
-		}
-		for _, l := range issue.Labels {
-			if model.IsType(l) && l != opts.Type {
-				if err := a.Client.RemoveLabel(ctx, number, l); err != nil {
-					return err
-				}
-			}
-		}
-		if !slices.Contains(issue.Labels, opts.Type) {
-			if err := a.Client.AddLabels(ctx, number, []string{opts.Type}); err != nil {
-				return err
-			}
+		if err := step("type", a.swapType(ctx, issue, opts.Type)); err != nil {
+			return err
 		}
 	}
 	if len(opts.AddAreas) > 0 {
-		if err := a.Client.AddLabels(ctx, number, opts.AddAreas); err != nil {
+		if err := step("add-area", a.Client.AddLabels(ctx, number, opts.AddAreas)); err != nil {
 			return err
 		}
 	}
 	for _, area := range opts.RemoveAreas {
-		if err := a.Client.RemoveLabel(ctx, number, area); err != nil {
+		if err := step("remove-area", a.Client.RemoveLabel(ctx, number, area)); err != nil {
 			return err
 		}
 	}
 	if opts.Title != "" {
-		if err := a.Client.EditTitle(ctx, number, opts.Title); err != nil {
+		if err := step("title", a.Client.EditTitle(ctx, number, opts.Title)); err != nil {
 			return err
 		}
 	}
 	if opts.Parent > 0 {
-		parent, err := a.Client.GetIssue(ctx, opts.Parent)
-		if err != nil {
-			return err
-		}
-		// replaceParent moves the issue when it already has one.
-		if err := a.Client.AddSubIssue(ctx, parent.ID, issue.ID, true); err != nil {
+		// AddSubIssue with replace moves the issue when it already has one.
+		if err := step("parent", a.Client.AddSubIssue(ctx, opts.Parent, number, true)); err != nil {
 			return err
 		}
 	}
@@ -264,16 +262,28 @@ func (a *App) Set(ctx context.Context, number int, opts SetOpts) error {
 		if issue.Parent == nil {
 			a.warnf("#%d has no parent; --no-parent is a no-op", number)
 		} else {
-			parent, err := a.Client.GetIssue(ctx, issue.Parent.Number)
-			if err != nil {
-				return err
-			}
-			if err := a.Client.RemoveSubIssue(ctx, parent.ID, issue.ID); err != nil {
+			if err := step("no-parent", a.Client.RemoveSubIssue(ctx, issue.Parent.Number, number)); err != nil {
 				return err
 			}
 		}
 	}
 	return a.reportMutation(ctx, number, "updated #%d\n", number)
+}
+
+// swapType enforces the one-type-label invariant: remove the others, add the
+// target if absent.
+func (a *App) swapType(ctx context.Context, issue model.Issue, typ string) error {
+	for _, l := range issue.Labels {
+		if model.IsType(l) && l != typ {
+			if err := a.Client.RemoveLabel(ctx, issue.Number, l); err != nil {
+				return err
+			}
+		}
+	}
+	if !slices.Contains(issue.Labels, typ) {
+		return a.Client.AddLabels(ctx, issue.Number, []string{typ})
+	}
+	return nil
 }
 
 // Close comments the reason and closes: not-planned unless --completed or
@@ -282,12 +292,12 @@ func (a *App) Close(ctx context.Context, number int, reason string, completed bo
 	if completed && duplicateOf > 0 {
 		return usageErr("--completed and --duplicate-of are mutually exclusive")
 	}
-	stateReason := "NOT_PLANNED"
+	stateReason := gh.CloseNotPlanned
 	switch {
 	case completed:
-		stateReason = "COMPLETED"
+		stateReason = gh.CloseCompleted
 	case duplicateOf > 0:
-		stateReason = "DUPLICATE"
+		stateReason = gh.CloseDuplicate
 		if reason == "" {
 			reason = fmt.Sprintf("Duplicate of #%d", duplicateOf)
 		}
@@ -305,14 +315,12 @@ func (a *App) Close(ctx context.Context, number int, reason string, completed bo
 	if err := a.Client.Comment(ctx, number, reason); err != nil {
 		return err
 	}
-	if err := a.Client.CloseIssue(ctx, issue.ID, stateReason); err != nil {
-		return err
+	if err := a.Client.CloseIssue(ctx, number, stateReason); err != nil {
+		// The reason comment already posted; flag it so a retry isn't read as
+		// a clean redo — re-running would post the comment a second time.
+		return fmt.Errorf("posted the reason comment on #%d but closing it failed (a retry will comment again): %w", number, err)
 	}
-	if a.JSON {
-		return a.reportMutation(ctx, number, "")
-	}
-	a.printf("closed #%d (%s)\n", number, strings.ToLower(strings.ReplaceAll(stateReason, "_", " ")))
-	return nil
+	return a.reportMutation(ctx, number, "closed #%d (%s)\n", number, strings.ToLower(strings.ReplaceAll(string(stateReason), "_", " ")))
 }
 
 // Block adds a native dependency after a transitive client-side cycle
@@ -328,22 +336,21 @@ func (a *App) Block(ctx context.Context, number, blocker int) error {
 	if !ok {
 		return genericErr("#%d is not an open issue in %s", number, a.Repo)
 	}
-	blockerIssue, ok := byNum[blocker]
-	if !ok {
+	if _, ok := byNum[blocker]; !ok {
 		return genericErr("#%d is not an open issue in %s; closed blockers don't block", blocker, a.Repo)
 	}
 	if slices.Contains(issue.OpenBlockers(), blocker) {
 		a.printf("#%d is already blocked by #%d\n", number, blocker)
 		return nil
 	}
-	if cycle := model.WouldCycle(issues, number, blocker); cycle != nil {
-		parts := make([]string, len(cycle))
-		for i, n := range cycle {
-			parts[i] = fmt.Sprintf("#%d", n)
-		}
-		return genericErr("refusing: would create dependency cycle %s", strings.Join(parts, " → "))
+	check := model.CheckBlockedBy(issues, number, blocker)
+	if check.Cycle != nil {
+		return genericErr("refusing: would create dependency cycle %s", render.FormatCycle(check.Cycle))
 	}
-	if err := a.Client.AddBlockedBy(ctx, issue.ID, blockerIssue.ID); err != nil {
+	if !check.Verifiable {
+		return genericErr("refusing: cannot verify #%d → #%d is cycle-free because some issues have more blockers than were fetched; reduce blockers on the issues involved and retry", number, blocker)
+	}
+	if err := a.Client.AddBlockedBy(ctx, number, blocker); err != nil {
 		return err
 	}
 	return a.reportMutation(ctx, number, "blocked #%d on #%d\n", number, blocker)
@@ -365,11 +372,7 @@ func (a *App) Unblock(ctx context.Context, number, blocker int) error {
 		a.printf("#%d is not blocked by #%d\n", number, blocker)
 		return nil
 	}
-	blockerIssue, err := a.Client.GetIssue(ctx, blocker)
-	if err != nil {
-		return err
-	}
-	if err := a.Client.RemoveBlockedBy(ctx, issue.ID, blockerIssue.ID); err != nil {
+	if err := a.Client.RemoveBlockedBy(ctx, number, blocker); err != nil {
 		return err
 	}
 	return a.reportMutation(ctx, number, "unblocked #%d from #%d\n", number, blocker)
@@ -390,11 +393,7 @@ func (a *App) EpicCreate(ctx context.Context, title string, children []int) erro
 		return err
 	}
 	for _, child := range children {
-		childIssue, err := a.Client.GetIssue(ctx, child)
-		if err != nil {
-			return fmt.Errorf("created epic #%d but attaching #%d failed: %w", created.Number, child, err)
-		}
-		if err := a.Client.AddSubIssue(ctx, created.ID, childIssue.ID, false); err != nil {
+		if err := a.Client.AddSubIssue(ctx, created.Number, child, false); err != nil {
 			return fmt.Errorf("created epic #%d but attaching #%d failed: %w", created.Number, child, err)
 		}
 	}
@@ -422,20 +421,18 @@ func (a *App) Init(ctx context.Context) error {
 		}
 		created = append(created, l.Name)
 	}
-	if a.JSON {
-		if created == nil {
-			created = []string{}
+	if created == nil {
+		created = []string{}
+	}
+	return a.emitResult(map[string]any{"createdLabels": created}, func() {
+		if len(created) == 0 {
+			a.printf("all convention labels already exist in %s\n", a.Repo)
+		} else {
+			a.printf("created labels: %s\n", strings.Join(created, ", "))
 		}
-		return render.WriteJSON(a.Out, map[string]any{"createdLabels": created})
-	}
-	if len(created) == 0 {
-		a.printf("all convention labels already exist in %s\n", a.Repo)
-	} else {
-		a.printf("created labels: %s\n", strings.Join(created, ", "))
-	}
-	a.printf("\nAdd to CLAUDE.md:\n\n%s\n", conventions.ClaudeSnippet)
-	a.printf("\nOr let a hook inject the primer automatically: issues hooks install\n")
-	return nil
+		a.printf("\nAdd to CLAUDE.md:\n\n%s\n", conventions.ClaudeSnippet)
+		a.printf("\nOr let a hook inject the primer automatically: issues hooks install\n")
+	})
 }
 
 // swapPriority enforces the one-priority-label invariant: remove the
@@ -458,15 +455,16 @@ func (a *App) swapPriority(ctx context.Context, issue model.Issue, p model.Prior
 // reportMutation prints the text confirmation, or re-fetches for the full
 // flat schema when --json is on.
 func (a *App) reportMutation(ctx context.Context, number int, format string, args ...any) error {
-	if a.JSON {
-		after, err := a.Client.GetIssue(ctx, number)
-		if err != nil {
-			return err
-		}
-		return render.JSONIssue(a.Out, after)
-	}
-	if format != "" {
+	if !a.JSON {
 		a.printf(format, args...)
+		return nil
 	}
-	return nil
+	after, err := a.Client.GetIssue(ctx, number)
+	if err != nil {
+		// The mutation itself succeeded; only the confirmation re-fetch
+		// failed. Say so, so a caller doesn't read a non-zero exit as
+		// "the change didn't happen" and retry into a duplicate.
+		return fmt.Errorf("#%d was updated, but fetching the result for --json failed: %w", number, err)
+	}
+	return a.emitMutation(after, format, args...)
 }

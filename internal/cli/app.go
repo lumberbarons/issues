@@ -8,6 +8,8 @@ import (
 	"io"
 
 	"github.com/lumberbarons/issues/internal/gh"
+	"github.com/lumberbarons/issues/internal/model"
+	"github.com/lumberbarons/issues/internal/render"
 )
 
 // Exit codes, kept meaningful so agent loops can branch on them.
@@ -64,4 +66,77 @@ func (a *App) progressf(format string, args ...any) {
 		return
 	}
 	fmt.Fprintf(a.Out, format, args...)
+}
+
+// The --json contract lives here so every command honors it identically
+// instead of re-deciding per command:
+//   - an issue collection  → NDJSON, one compact object per line, so the
+//     stream stays parseable under head/grep and output truncation;
+//   - a single issue       → one indented JSON object;
+//   - a command result     → one indented JSON object.
+//
+// Text output is the human form of the same data. Commands describe what to
+// emit through these helpers rather than branching on a.JSON themselves.
+
+// emitList renders an issue collection: NDJSON under --json, otherwise the
+// given text renderer, or emptyMsg when there are none.
+func (a *App) emitList(issues []model.Issue, emptyMsg string, renderText func(io.Writer, []model.Issue)) error {
+	if a.JSON {
+		return render.JSONList(a.Out, issues)
+	}
+	if len(issues) == 0 {
+		a.printf("%s\n", emptyMsg)
+		return nil
+	}
+	renderText(a.Out, issues)
+	return nil
+}
+
+// emitIssue renders one issue in full.
+func (a *App) emitIssue(issue model.Issue) error {
+	if a.JSON {
+		return render.JSONIssue(a.Out, issue)
+	}
+	render.Show(a.Out, issue)
+	return nil
+}
+
+// emitEpicStatus renders one epic and its children.
+func (a *App) emitEpicStatus(epic model.Issue, children []model.Issue) error {
+	if a.JSON {
+		return render.JSONEpicStatus(a.Out, epic, children)
+	}
+	render.EpicStatus(a.Out, epic, children)
+	return nil
+}
+
+// emitEpicStatus and emitList/emitIssue cover reads; the rest cover writes.
+
+// emitMutation reports a mutation whose resulting issue is already loaded:
+// the full issue as JSON, otherwise the given text line.
+func (a *App) emitMutation(issue model.Issue, format string, args ...any) error {
+	if a.JSON {
+		return render.JSONIssue(a.Out, issue)
+	}
+	a.printf(format, args...)
+	return nil
+}
+
+// emitPrime renders the session-start primer.
+func (a *App) emitPrime(static string, d render.PrimeData) error {
+	if a.JSON {
+		return render.JSONPrime(a.Out, d)
+	}
+	render.Prime(a.Out, static, d)
+	return nil
+}
+
+// emitResult reports a non-issue command outcome: an indented JSON object
+// under --json, otherwise the text written by writeText.
+func (a *App) emitResult(jsonObj any, writeText func()) error {
+	if a.JSON {
+		return render.WriteJSON(a.Out, jsonObj)
+	}
+	writeText()
+	return nil
 }

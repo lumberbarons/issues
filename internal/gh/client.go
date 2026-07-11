@@ -28,14 +28,33 @@ type Label struct {
 	Description string
 }
 
+// IssueState is a GitHub issue state, used to filter list queries. Typed so
+// callers can't misspell the wire enum.
+type IssueState string
+
+const (
+	StateOpen   IssueState = "OPEN"
+	StateClosed IssueState = "CLOSED"
+)
+
+// CloseReason is why an issue is closed, matching GitHub's
+// IssueClosedStateReason enum.
+type CloseReason string
+
+const (
+	CloseCompleted  CloseReason = "COMPLETED"
+	CloseNotPlanned CloseReason = "NOT_PLANNED"
+	CloseDuplicate  CloseReason = "DUPLICATE"
+)
+
 // Client is the API surface the commands use; the tests fake it.
 type Client interface {
 	// Viewer returns the authenticated user's login.
 	Viewer(ctx context.Context) (string, error)
-	// ListIssues fetches all issues in the given states ("OPEN"/"CLOSED")
-	// with labels, assignees, parent, sub-issues, and blockers, paginating
-	// the outer connection. Nested connections are capped (see query).
-	ListIssues(ctx context.Context, states []string) ([]model.Issue, error)
+	// ListIssues fetches all issues in the given states with labels,
+	// assignees, parent, sub-issues, and blockers, paginating the outer
+	// connection. Nested connections are capped (see query).
+	ListIssues(ctx context.Context, states []IssueState) ([]model.Issue, error)
 	// GetIssue fetches one issue in any state, including body and recent
 	// comments.
 	GetIssue(ctx context.Context, number int) (model.Issue, error)
@@ -46,14 +65,15 @@ type Client interface {
 	AddAssignee(ctx context.Context, number int, login string) error
 	RemoveAssignees(ctx context.Context, number int, logins []string) error
 	Comment(ctx context.Context, number int, body string) error
-	// CloseIssue closes by node ID with reason "COMPLETED", "NOT_PLANNED",
-	// or "DUPLICATE".
-	CloseIssue(ctx context.Context, issueID, reason string) error
-	// AddBlockedBy marks issueID as blocked by blockingIssueID.
-	AddBlockedBy(ctx context.Context, issueID, blockingIssueID string) error
-	RemoveBlockedBy(ctx context.Context, issueID, blockingIssueID string) error
-	AddSubIssue(ctx context.Context, parentID, childID string, replaceParent bool) error
-	RemoveSubIssue(ctx context.Context, parentID, childID string) error
+	// Every method below identifies issues by number; the GraphQL-backed
+	// implementations resolve node IDs internally, so callers never juggle
+	// two identifier families.
+	CloseIssue(ctx context.Context, number int, reason CloseReason) error
+	// AddBlockedBy marks number as blocked by blockingNumber.
+	AddBlockedBy(ctx context.Context, number, blockingNumber int) error
+	RemoveBlockedBy(ctx context.Context, number, blockingNumber int) error
+	AddSubIssue(ctx context.Context, parentNumber, childNumber int, replaceParent bool) error
+	RemoveSubIssue(ctx context.Context, parentNumber, childNumber int) error
 	ListLabels(ctx context.Context) ([]Label, error)
 	CreateLabel(ctx context.Context, label Label) error
 }
