@@ -38,7 +38,11 @@ so the entire distributed-state problem beads solves disappears.
 ## Enshrined conventions
 
 These are the conventions already proven in solar-controller's CLAUDE.md, moved from
-prose into code. The tool *enforces* them; `prime` *teaches* them.
+prose into code. They are **guarantees on the tool's own write path** — anything
+`create`/`set`/`epic` touches conforms — and **normalization rules on the read
+path**. GitHub has many entry points (web UI, mobile, bots, drive-by bug reports),
+so issues that don't follow the conventions are first-class citizens, not defects:
+never hidden, never auto-"repaired". `prime` *teaches* the conventions.
 
 - **Priority labels**, every issue gets exactly one: `P0` (critical) → `P4` (backlog).
   Default `P2`.
@@ -57,22 +61,48 @@ prose into code. The tool *enforces* them; `prime` *teaches* them.
   `### Done when` (checklist). Scaffolded by `create`, sections omitted when empty.
 - **Workflow**: `ready` → `start` → branch (`feat/`|`fix/`|`chore/`) → PR with
   `Fixes #n`. Closing via PR is the norm; `close` is for wontfix/duplicate.
-- **Drift**: the tool enforces conventions on its own write paths, but the web UI
-  can still violate them (two priority labels, missing type, epic worked directly).
-  `prime` warns about violations it sees — it already has the data. A fuller
-  `doctor --fix` is deferred to M4.
+- **Untriaged, not broken**: an issue missing its priority or type label — typical
+  for anything filed outside the tool — is *untriaged*, a normal state. `issues
+  triage` lists them so a human or agent can label each via `set`; nothing is ever
+  stamped with defaults automatically, since auto-labeling someone else's report
+  destroys information.
+- **Contradictions** (two priority labels, an in-progress epic) are the only
+  per-issue warnings `prime` emits; normalization still picks a deterministic
+  answer in the meantime.
+
+### Read-path normalization
+
+Deterministic rules, implemented pure in `internal/model` and stated in the `prime`
+primer so agents know what they're looking at:
+
+- Missing priority → renders as `P?`, sorts after P4. Multiple priority labels →
+  highest wins, plus a warning.
+- Missing type → shown without one. Multiple → first of bug|enhancement|task wins,
+  plus a warning.
+- Epic-ness = *has sub-issues*; the `Epic: ` title prefix is cosmetic. `ready`
+  excludes any issue with sub-issues.
+- Bodies render as-is. The template is scaffolding for `create`, never retrofitted
+  onto issues written by others.
+- Untriaged issues do appear in `ready` (invisible work is the failure mode), sorted
+  after explicitly-prioritized work. `start` on an untriaged issue requires
+  `--priority` — claiming forces triage.
 
 ## Command surface (v1)
 
 ```
 issues prime                      # session-start context (see below)
-issues ready                      # open, non-epic, zero *open* blockers; sorted P0→P4, then oldest
+issues ready                      # open, non-epic, zero *open* blockers; sorted
+                                  # P0→P4 then P?, oldest first within a priority
 issues list [--label X] [--epic N] [--closed]
 issues show <n>                   # detail: body, deps, parent, children, recent comments
 issues create --type bug|enhancement|task [--priority P0..P4] [--area X]
               [--blocked-by N...] [--parent N] [--discovered-from N]
               --title "..." [--body-file F | --edit]
-issues start <n>                  # claim: assign @me, add in-progress label
+issues start <n> [--priority P0..P4]
+                                  # claim: assign @me, add in-progress label;
+                                  # untriaged issues require --priority (claim = triage)
+issues triage                     # untriaged issues (missing priority/type), oldest
+                                  # first — work through them with `set`
 issues set <n> [--priority P0..P4] [--type bug|enhancement|task] [--add-area X]
            [--remove-area X] [--parent N | --no-parent] [--title "..."]
                                   # retriage/edit within conventions (swaps the old
@@ -99,9 +129,10 @@ maintaining hand-written workflow prose. Three parts:
    hundred tokens, including the tool's own command cheatsheet.
 2. **Live state** — ready work (top N by priority), in-progress issues and their
    assignee, epics with progress (`#137 Voltgo 2/6`), and open-blocker counts.
-3. **Warnings** — convention violations spotted in the fetched data (`⚠ #42 has two
-   priority labels`). Section omitted entirely when the repo is clean, which is the
-   normal case.
+3. **Warnings** — contradictions only (`⚠ #42 has two priority labels`). Absences
+   are not warnings: untriaged work rolls up to a single line (`7 untriaged →
+   issues triage`), so a public repo full of drive-by reports doesn't drown the
+   primer. Section omitted entirely when the repo is clean.
 
 Sketch:
 
@@ -149,7 +180,8 @@ typical repo.
 - **Layout**:
   - `cmd/issues/` — main, urfave/cli command wiring
   - `internal/gh/` — thin API layer (interface, so commands are testable against a fake)
-  - `internal/model/` — Issue/Epic domain types, ready/cycle logic (pure, unit-tested)
+  - `internal/model/` — Issue/Epic domain types, ready/normalization/cycle logic
+    (pure, unit-tested)
   - `internal/render/` — text + JSON renderers (golden-file tests)
   - `internal/conventions/` — labels, body template, primer text (the opinions live here)
 - **Testing**: unit tests against a fake API layer; golden files for renderer output;
@@ -166,13 +198,12 @@ typical repo.
   milestone — adopt in solar-controller immediately.*
 - **M2 — write**: `create` (template + label enforcement), `set` (retriage —
   priority changes are the most common tracker operation, and doing them through
-  the tool is what keeps the one-label invariants true), `block`/`unblock` with
-  cycle detection, `start`, `close`, `epic create`.
+  the tool is what keeps the one-label invariants true), `triage`, `block`/`unblock`
+  with cycle detection, `start`, `close`, `epic create`.
 - **M3 — bootstrap**: `init` (create label set in a fresh repo, emit the CLAUDE.md
   snippet that says little more than "run `issues prime`"). Replace solar-controller's
   hand-written conventions section with it.
-- **M4 — polish**: `--json` everywhere, `doctor --fix` (bulk convention repair, if
-  drift turns out to happen in practice), pagination hardening, maybe a read cache,
+- **M4 — polish**: `--json` everywhere, pagination hardening, maybe a read cache,
   maybe `remember`, maybe a `gh` extension alias (`gh-issues`) for distribution.
 
 ## Open questions
