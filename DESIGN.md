@@ -184,7 +184,9 @@ typical repo.
 - **API strategy**: one GraphQL query per command where possible. `ready`/`prime`
   fetch all open issues with `blockedBy`, `parent`, `subIssues`, labels, assignees
   in a single paginated query and filter client-side — avoids N+1 and stays trivially
-  inside rate limits for single-user scale.
+  inside rate limits for single-user scale. Where the API offers server-side rollups
+  (`subIssuesSummary`, `issueDependenciesSummary`), prefer them over fetching nested
+  nodes just to count.
 - **Layout**:
   - `cmd/issues/` — main, urfave/cli command wiring
   - `internal/gh/` — thin API layer (interface, so commands are testable against a fake)
@@ -225,14 +227,55 @@ typical repo.
   PATH hint when needed. `go install .../cmd/issues@latest` remains the
   toolchain-native alternative.
 
+## Spike results (2026-07-10)
+
+The design's riskiest assumptions, tested against the live GitHub API before writing
+any product code.
+
+- **GraphQL surface exists — pass.** The `Issue` type exposes `blockedBy`, `blocking`,
+  `parent`, `subIssues`, and — a bonus the design didn't assume — server-side rollups
+  `issueDependenciesSummary` and `subIssuesSummary`, which `epic status` and blocked
+  counts should prefer over client-side counting. The mutations `addBlockedBy` /
+  `removeBlockedBy` / `addSubIssue` / `removeSubIssue` / `reprioritizeSubIssue` all
+  exist, so `block`, `unblock`, and `epic create` have first-class API support. No
+  preview/feature headers required for any of it.
+- **Single "fetch everything" query — pass.** One request for all open issues with
+  labels, assignees, `parent`, `subIssues`, and `blockedBy` against solar-controller
+  (19 open issues) completes in ~300 ms. `blockedBy` nodes carry `state`, so `ready`
+  treats closed blockers as non-blocking with no extra queries. Rate limits and
+  latency are non-issues at single-user scale; the no-cache-in-v1 call stands.
+  Caveat confirmed: nested connections don't paginate with the outer issues cursor —
+  v1 caps them (`first: 50` sub-issues, `first: 20` blockers) and must warn when
+  `totalCount` exceeds the cap rather than silently truncate.
+- **go-gh smoke test — pass.** A throwaway `main.go` (~80 lines) using
+  `repository.Current()` and `api.DefaultGraphQLClient()` detected the repo from the
+  git remote, reused `gh`'s keyring credentials with no auth code of our own, ran the
+  query above, and computed 13 ready of 19 open with the client-side filter. This is
+  effectively M0's skeleton.
+- **`prime` token budget — pass.** A full mock primer
+  ([docs/primer-mock.md](docs/primer-mock.md)) for a busy repo — static conventions
+  and command cheatsheet plus live Ready / In progress / Blocked / Epics sections —
+  measures ~640 tokens (tiktoken `o200k_base`; Claude's tokenizer typically runs
+  slightly higher). The split is roughly half static, half live, so the ~600 target
+  holds as long as live sections cap at top-N per section.
+- **Cycle rejection — unverified.** Whether `addBlockedBy` refuses circular
+  dependencies server-side is undocumented: the
+  [dependency docs](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/creating-issue-dependencies)
+  are silent, and the REST `POST .../dependencies/blocked_by` endpoint lists only a
+  generic `422 Validation failed`. Needs an empirical test in a scratch repo: create
+  A←B, attempt B←A, attempt a longer A←B←C←A chain, attempt a self-block. Until
+  proven, client-side cycle detection stays in `internal/model`; if the API rejects
+  cycles, it shrinks to rendering the server error nicely.
+
+## Milestones
+
 - **M0 — scaffold**: module, urfave/cli v3 skeleton, go-gh auth + repo detection,
-  `issues list` (proves the GraphQL query and renderer end-to-end). The query must
-  include `parent`/`subIssues`/`blockedBy` from day one — this milestone verifies
-  the exact field names, any feature headers, whether the API rejects dependency
-  cycles natively (if it does, our cycle check is just a friendlier error), and that
-  nested `subIssues`/`blockedBy` connections behave under capped `first: N` slices —
-  nested pagination is awkward, so cap and warn on truncation rather than silently
-  dropping. CI (lint + full tests) arrives with the scaffold.
+  `issues list` (proves the GraphQL query and renderer end-to-end). The query
+  includes `parent`/`subIssues`/`blockedBy` from day one — field names, header
+  requirements, and nested-cap behavior are already verified (see spike results);
+  the one API unknown left for this milestone is whether `addBlockedBy` rejects
+  dependency cycles natively (if it does, our cycle check is just a friendlier
+  error). CI (lint + full tests) arrives with the scaffold.
 - **M1 — read**: `ready`, `show`, `epic status`, `prime` v1. *This is the payoff
   milestone — adopt in solar-controller immediately.* The first tagged release
   (goreleaser + install.sh) ships here, since adoption needs an installable binary.
