@@ -336,8 +336,12 @@ func (a *App) Block(ctx context.Context, number, blocker int) error {
 		a.printf("#%d is already blocked by #%d\n", number, blocker)
 		return nil
 	}
-	if cycle := model.WouldCycle(issues, number, blocker); cycle != nil {
-		return genericErr("refusing: would create dependency cycle %s", render.FormatCycle(cycle))
+	check := model.CheckBlockedBy(issues, number, blocker)
+	if check.Cycle != nil {
+		return genericErr("refusing: would create dependency cycle %s", render.FormatCycle(check.Cycle))
+	}
+	if !check.Verifiable {
+		return genericErr("refusing: cannot verify #%d → #%d is cycle-free because some issues have more blockers than were fetched; reduce blockers on the issues involved and retry", number, blocker)
 	}
 	if err := a.Client.AddBlockedBy(ctx, issue.ID, blockerIssue.ID); err != nil {
 		return err

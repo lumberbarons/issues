@@ -411,6 +411,24 @@ func TestBlockRefusesCycle(t *testing.T) {
 	}
 }
 
+func TestBlockRefusesWhenCycleCheckUnverifiable(t *testing.T) {
+	// #2's blocker list was capped, so the transitive cycle check from it is
+	// blind to hidden blockers; Block must refuse rather than risk creating
+	// a cycle GitHub won't catch.
+	b := issue(2, "B", "P2", "bug")
+	b.BlockedBy = []model.Ref{{Number: 3, State: "OPEN"}}
+	b.BlockedByTotal = 25
+	f := newFake(issue(1, "A", "P2", "bug"), b, issue(3, "C", "P2", "bug"))
+	app, _, _ := newApp(f)
+	err := app.Block(ctx, 1, 2)
+	if err == nil || !strings.Contains(err.Error(), "cannot verify") {
+		t.Errorf("err = %v", err)
+	}
+	if len(f.byNumber(1).BlockedBy) != 0 {
+		t.Error("edge added despite unverifiable check")
+	}
+}
+
 func TestBlockAlreadyBlocked(t *testing.T) {
 	a := issue(1, "A", "P2", "bug")
 	a.BlockedBy = []model.Ref{{Number: 2, State: "OPEN"}}

@@ -66,39 +66,54 @@ func TestCyclesIgnoresClosedMembers(t *testing.T) {
 	}
 }
 
-func TestWouldCycleSelf(t *testing.T) {
-	if got := WouldCycle(nil, 7, 7); !reflect.DeepEqual(got, []int{7, 7}) {
-		t.Errorf("WouldCycle(self) = %v", got)
+func TestCheckBlockedBySelf(t *testing.T) {
+	got := CheckBlockedBy(nil, 7, 7)
+	if !reflect.DeepEqual(got.Cycle, []int{7, 7}) || !got.Verifiable {
+		t.Errorf("CheckBlockedBy(self) = %+v", got)
 	}
 }
 
-func TestWouldCycleDirect(t *testing.T) {
+func TestCheckBlockedByDirect(t *testing.T) {
 	// 2 is blocked by 1; adding "1 blocked by 2" closes the loop.
 	issues := []Issue{blocked(1), blocked(2, 1)}
-	got := WouldCycle(issues, 1, 2)
-	want := []int{1, 2, 1}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("WouldCycle() = %v, want %v", got, want)
+	got := CheckBlockedBy(issues, 1, 2)
+	if want := []int{1, 2, 1}; !reflect.DeepEqual(got.Cycle, want) {
+		t.Errorf("CheckBlockedBy().Cycle = %v, want %v", got.Cycle, want)
 	}
 }
 
-func TestWouldCycleTransitive(t *testing.T) {
+func TestCheckBlockedByTransitive(t *testing.T) {
 	// 2 blocked by 1, 3 blocked by 2; adding "1 blocked by 3" -> 1←3←2←1.
 	issues := []Issue{blocked(1), blocked(2, 1), blocked(3, 2)}
-	got := WouldCycle(issues, 1, 3)
-	want := []int{1, 3, 2, 1}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("WouldCycle() = %v, want %v", got, want)
+	got := CheckBlockedBy(issues, 1, 3)
+	if want := []int{1, 3, 2, 1}; !reflect.DeepEqual(got.Cycle, want) {
+		t.Errorf("CheckBlockedBy().Cycle = %v, want %v", got.Cycle, want)
 	}
 }
 
-func TestWouldCycleSafe(t *testing.T) {
+func TestCheckBlockedBySafe(t *testing.T) {
 	issues := []Issue{blocked(1), blocked(2, 1), blocked(3, 2)}
-	if got := WouldCycle(issues, 3, 1); got != nil {
-		t.Errorf("WouldCycle() = %v, want nil", got)
+	if got := CheckBlockedBy(issues, 3, 1); got.Cycle != nil || !got.Verifiable {
+		t.Errorf("CheckBlockedBy() = %+v, want no cycle and verifiable", got)
 	}
-	if got := WouldCycle(issues, 4, 1); got != nil {
-		t.Errorf("WouldCycle(new issue) = %v, want nil", got)
+	if got := CheckBlockedBy(issues, 4, 1); got.Cycle != nil || !got.Verifiable {
+		t.Errorf("CheckBlockedBy(new issue) = %+v", got)
+	}
+}
+
+func TestCheckBlockedByUnverifiableWhenBlockersTruncated(t *testing.T) {
+	// The search from blocker (2) passes through an issue whose blocker list
+	// was capped, so a hidden blocker could reach the target: no cycle is
+	// found, but the verdict must not claim the edge is safe.
+	two := blocked(2, 1)
+	two.BlockedByTotal = 25 // more blockers than the one fetched
+	issues := []Issue{blocked(1), two}
+	got := CheckBlockedBy(issues, 5, 2)
+	if got.Cycle != nil {
+		t.Errorf("unexpected cycle: %v", got.Cycle)
+	}
+	if got.Verifiable {
+		t.Error("verdict claims verifiable despite truncated blockers on the path")
 	}
 }
 

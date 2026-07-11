@@ -11,10 +11,15 @@ import (
 // detected client-side: every member of a cycle has an open blocker, so a
 // cycle silently excludes all its members from ready forever.
 //
+// allOpen must be every open issue in the repository. Edges to issues not in
+// the set are dropped as non-blocking, so passing a filtered subset yields
+// false negatives — a cycle whose members were filtered out goes undetected.
+//
 // Each cycle is returned once as a slice of issue numbers in edge order
 // (a blocked-by b blocked-by c ... blocked-by a), starting from its
 // smallest member.
-func Cycles(issues []Issue) [][]int {
+func Cycles(allOpen []Issue) [][]int {
+	issues := allOpen
 	adj := blockedByGraph(issues)
 
 	const (
@@ -59,22 +64,43 @@ func Cycles(issues []Issue) [][]int {
 	return cycles
 }
 
-// WouldCycle reports the cycle path that adding "issue blocked by blocker"
-// would create, or nil if the edge is safe. The check is transitive: the
-// edge closes a cycle iff blocker is already (transitively) blocked by
-// issue. The returned path is the resulting cycle in edge order, starting
-// at issue.
-func WouldCycle(issues []Issue, issue, blocker int) []int {
+// CycleCheck is the verdict on a prospective "issue blocked by blocker" edge.
+type CycleCheck struct {
+	// Cycle is the cycle the edge would close, in edge order starting at
+	// issue, or nil if no cycle was found.
+	Cycle []int
+	// Verifiable is false when an issue reached during the search had more
+	// blockers than were fetched: an unfetched blocker could complete a
+	// cycle the search cannot see, so a nil Cycle must not be treated as
+	// proof the edge is safe.
+	Verifiable bool
+}
+
+// CheckBlockedBy reports whether adding "issue blocked by blocker" would
+// create a cycle. The check is transitive over blocked-by edges: the edge
+// closes a cycle iff blocker is already (transitively) blocked by issue.
+//
+// allOpen must be every open issue in the repository (see Cycles). When any
+// issue on the search path had a truncated blocker list the verdict is
+// marked unverifiable, because the missing edges could hide a cycle.
+func CheckBlockedBy(allOpen []Issue, issue, blocker int) CycleCheck {
 	if issue == blocker {
-		return []int{issue, issue}
+		return CycleCheck{Cycle: []int{issue, issue}, Verifiable: true}
 	}
-	adj := blockedByGraph(issues)
+	adj := blockedByGraph(allOpen)
+	truncated := truncatedBlockers(allOpen)
+	verifiable := true
 	// Find a path blocker -> ... -> issue through blocked-by edges.
 	visited := map[int]bool{blocker: true}
 	var dfs func(n int, path []int) []int
 	dfs = func(n int, path []int) []int {
 		if n == issue {
 			return path
+		}
+		if truncated[n] {
+			// n's blocked-by list is incomplete; a hidden edge could reach
+			// issue, so a "no cycle" answer here can't be trusted.
+			verifiable = false
 		}
 		for _, m := range adj[n] {
 			if !visited[m] {
@@ -88,10 +114,22 @@ func WouldCycle(issues []Issue, issue, blocker int) []int {
 	}
 	p := dfs(blocker, []int{blocker})
 	if p == nil {
-		return nil
+		return CycleCheck{Verifiable: verifiable}
 	}
 	// p is blocker -> ... -> issue; the new edge closes issue -> blocker.
-	return append([]int{issue}, p...)
+	// A found cycle is definite regardless of truncation elsewhere.
+	return CycleCheck{Cycle: append([]int{issue}, p...), Verifiable: true}
+}
+
+// truncatedBlockers indexes issues whose blocked-by connection was capped.
+func truncatedBlockers(issues []Issue) map[int]bool {
+	out := make(map[int]bool)
+	for _, i := range issues {
+		if i.BlockedByTotal > len(i.BlockedBy) {
+			out[i.Number] = true
+		}
+	}
+	return out
 }
 
 // blockedByGraph builds the adjacency map of blocked-by edges between open
