@@ -61,6 +61,11 @@ never hidden, never auto-"repaired". `prime` *teaches* the conventions.
   `### Done when` (checklist). Scaffolded by `create`, sections omitted when empty.
 - **Workflow**: `ready` → `start` → branch (`feat/`|`fix/`|`chore/`) → PR with
   `Fixes #n`. Closing via PR is the norm; `close` is for wontfix/duplicate.
+- **Claiming is guarded**: `start` refuses an issue that is already assigned or
+  `in-progress` and exits with a distinct code, so an agent loop moves on to the
+  next ready item instead of doubling up. GitHub has no conditional writes, so the
+  guard is check-then-act with a re-read after claiming — a small race window
+  remains (see open questions).
 - **Untriaged, not broken**: an issue missing its priority or type label — typical
   for anything filed outside the tool — is *untriaged*, a normal state. `issues
   triage` lists them so a human or agent can label each via `set`; nothing is ever
@@ -98,9 +103,11 @@ issues show <n>                   # detail: body, deps, parent, children, recent
 issues create --type bug|enhancement|task [--priority P0..P4] [--area X]
               [--blocked-by N...] [--parent N] [--discovered-from N]
               --title "..." [--body-file F | --edit]
-issues start <n> [--priority P0..P4]
-                                  # claim: assign @me, add in-progress label;
-                                  # untriaged issues require --priority (claim = triage)
+issues start <n> [--priority P0..P4] [--force]
+                                  # guarded claim: refuses if already assigned or
+                                  # in-progress (distinct exit code — pick the next
+                                  # ready item); --force steals; untriaged issues
+                                  # require --priority (claim = triage)
 issues triage                     # untriaged issues (missing priority/type), oldest
                                   # first — work through them with `set`
 issues set <n> [--priority P0..P4] [--type bug|enhancement|task] [--add-area X]
@@ -164,7 +171,8 @@ typical repo.
 - `--json` everywhere, with a flat schema (deps as number arrays, not
   `{nodes:[...]}` wrappers — hide GraphQL shapes from consumers).
 - Errors are one line, actionable, exit codes meaningful (`ready` with no results
-  exits 0 with `no ready work`; auth failure exits 4; etc.).
+  exits 0 with `no ready work`; `start` on a claimed issue exits 3 with
+  `already claimed`; auth failure exits 4; etc.).
 
 ## Architecture
 
@@ -192,8 +200,11 @@ typical repo.
 - **M0 — scaffold**: module, urfave/cli v3 skeleton, go-gh auth + repo detection,
   `issues list` (proves the GraphQL query and renderer end-to-end). The query must
   include `parent`/`subIssues`/`blockedBy` from day one — this milestone verifies
-  the exact field names, any feature headers, and whether the API rejects dependency
-  cycles natively (if it does, our cycle check is just a friendlier error).
+  the exact field names, any feature headers, whether the API rejects dependency
+  cycles natively (if it does, our cycle check is just a friendlier error), and that
+  nested `subIssues`/`blockedBy` connections behave under capped `first: N` slices —
+  nested pagination is awkward, so cap and warn on truncation rather than silently
+  dropping.
 - **M1 — read**: `ready`, `show`, `epic status`, `prime` v1. *This is the payoff
   milestone — adopt in solar-controller immediately.*
 - **M2 — write**: `create` (template + label enforcement), `set` (retriage —
@@ -204,7 +215,8 @@ typical repo.
   snippet that says little more than "run `issues prime`"). Replace solar-controller's
   hand-written conventions section with it.
 - **M4 — polish**: `--json` everywhere, pagination hardening, maybe a read cache,
-  maybe `remember`, maybe a `gh` extension alias (`gh-issues`) for distribution.
+  maybe `remember`. Distribution is `go install` only — no `gh` extension; agents
+  invoke the bare `issues` binary and that's the whole interface.
 
 ## Open questions
 
@@ -218,3 +230,8 @@ typical repo.
   churn). v1: both — assign is the claim, label is the visibility.
 - **Multi-repo prime.** Someday `issues prime --all-repos` for a workspace overview?
   Out of scope for v1.
+- **Same-user claim races.** Every agent authenticates as `@me`, so two parallel
+  sessions that race `start` inside the guard window are indistinguishable by
+  assignee or label — both think they won. If this happens in practice, tie-break
+  with a claim comment carrying a session nonce (earliest comment wins, loser backs
+  off). Deferred until actually observed.
