@@ -89,9 +89,15 @@ func (f *fakeClient) refreshRefs() {
 				}
 			}
 		}
-		i.SubIssuesTotal = len(i.SubIssues)
 		i.SubIssuesCompleted = completed
-		i.BlockedByTotal = len(i.BlockedBy)
+		// Default the totals to the fetched length, but preserve a larger
+		// total a test set deliberately to simulate a capped connection.
+		if i.SubIssuesTotal < len(i.SubIssues) {
+			i.SubIssuesTotal = len(i.SubIssues)
+		}
+		if i.BlockedByTotal < len(i.BlockedBy) {
+			i.BlockedByTotal = len(i.BlockedBy)
+		}
 	}
 }
 

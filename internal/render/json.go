@@ -24,12 +24,15 @@ type IssueJSON struct {
 	Untriaged          bool          `json:"untriaged"`
 	Parent             *int          `json:"parent"`
 	BlockedBy          []int         `json:"blockedBy"`
+	BlockedByTotal     int           `json:"blockedByTotal"`
 	OpenBlockers       []int         `json:"openBlockers"`
 	SubIssues          []int         `json:"subIssues"`
+	SubIssuesTotal     int           `json:"subIssuesTotal"`
 	SubIssuesCompleted int           `json:"subIssuesCompleted"`
 	CreatedAt          time.Time     `json:"createdAt"`
 	Body               string        `json:"body,omitempty"`
 	Comments           []CommentJSON `json:"comments,omitempty"`
+	CommentsTotal      int           `json:"commentsTotal,omitempty"`
 }
 
 // CommentJSON is one recent comment in show --json.
@@ -52,8 +55,10 @@ func ToJSON(i model.Issue, withDetail bool) IssueJSON {
 		InProgress:         i.InProgress(),
 		Untriaged:          i.Untriaged(),
 		BlockedBy:          refNumbers(i.BlockedBy),
+		BlockedByTotal:     i.BlockedByTotal,
 		OpenBlockers:       emptyIntNotNull(i.OpenBlockers()),
 		SubIssues:          refNumbers(i.SubIssues),
+		SubIssuesTotal:     i.SubIssuesTotal,
 		SubIssuesCompleted: i.SubIssuesCompleted,
 		CreatedAt:          i.CreatedAt,
 	}
@@ -70,6 +75,7 @@ func ToJSON(i model.Issue, withDetail bool) IssueJSON {
 	}
 	if withDetail {
 		out.Body = i.Body
+		out.CommentsTotal = i.CommentsTotal
 		for _, c := range i.Comments {
 			out.Comments = append(out.Comments, CommentJSON{Author: c.Author, CreatedAt: c.CreatedAt, Body: c.Body})
 		}
@@ -158,20 +164,14 @@ type EpicStatusJSON struct {
 	Children []IssueJSON `json:"children"`
 }
 
-// JSONEpicStatus writes one epic and its children, resolving each child
-// from the fetched set where possible.
-func JSONEpicStatus(w io.Writer, epic model.Issue, byNumber map[int]model.Issue) error {
+// JSONEpicStatus writes one epic and its children. Children are the epic's
+// full parent-backlinked set, so every entry is a real fetched issue — no
+// fabricated placeholders — and the list is complete even when the epic's
+// sub-issue connection was capped.
+func JSONEpicStatus(w io.Writer, epic model.Issue, children []model.Issue) error {
 	out := EpicStatusJSON{Epic: ToJSON(epic, false), Children: []IssueJSON{}}
-	for _, ref := range epic.SubIssues {
-		if child, ok := byNumber[ref.Number]; ok {
-			out.Children = append(out.Children, ToJSON(child, false))
-		} else {
-			out.Children = append(out.Children, IssueJSON{
-				Number: ref.Number, State: strings.ToLower(ref.State),
-				Areas: []string{}, Assignees: []string{},
-				BlockedBy: []int{}, OpenBlockers: []int{}, SubIssues: []int{},
-			})
-		}
+	for _, child := range children {
+		out.Children = append(out.Children, ToJSON(child, false))
 	}
 	return writeJSON(w, out)
 }

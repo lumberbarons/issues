@@ -139,7 +139,11 @@ func Show(w io.Writer, i model.Issue) {
 	}
 	if len(i.Comments) > 0 {
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, "comments:")
+		header := "comments:"
+		if i.CommentsTotal > len(i.Comments) {
+			header = fmt.Sprintf("comments (showing last %d of %d):", len(i.Comments), i.CommentsTotal)
+		}
+		fmt.Fprintln(w, header)
 		for _, c := range i.Comments {
 			fmt.Fprintf(w, "  @%s (%s): %s\n", c.Author, c.CreatedAt.Format("2006-01-02"), strings.TrimSpace(c.Body))
 		}
@@ -157,20 +161,17 @@ func refList(refs []model.Ref) string {
 	return strings.Join(parts, ", ")
 }
 
-// EpicStatus renders one epic with its children, using the full issue set
-// to resolve child titles.
-func EpicStatus(w io.Writer, epic model.Issue, byNumber map[int]model.Issue) {
+// EpicStatus renders one epic and its children. Children are the epic's
+// full parent-backlinked set (complete even when the sub-issue connection
+// was capped); the rollup line keeps the server-side completed/total.
+func EpicStatus(w io.Writer, epic model.Issue, children []model.Issue) {
 	fmt.Fprintf(w, "%s  %d/%d\n", Line(epic), epic.SubIssuesCompleted, epic.SubIssuesTotal)
-	for _, ref := range epic.SubIssues {
+	for _, child := range children {
 		mark := "○"
-		if !ref.IsOpen() {
+		if !child.IsOpen() {
 			mark = "✓"
 		}
-		if child, ok := byNumber[ref.Number]; ok {
-			fmt.Fprintf(w, "  %s #%d %s  %s\n", mark, child.Number, meta(child), child.Title)
-		} else {
-			fmt.Fprintf(w, "  %s #%d\n", mark, ref.Number)
-		}
+		fmt.Fprintf(w, "  %s #%d %s  %s\n", mark, child.Number, meta(child), child.Title)
 	}
 }
 

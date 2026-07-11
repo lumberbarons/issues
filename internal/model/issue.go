@@ -110,6 +110,9 @@ type Issue struct {
 	// when the nested connection was capped.
 	BlockedByTotal int
 	Comments       []Comment
+	// CommentsTotal is the server-side total; may exceed len(Comments) when
+	// only the most recent were fetched.
+	CommentsTotal int
 }
 
 // Priority returns the effective priority. When an issue carries multiple
@@ -305,6 +308,21 @@ func UntriagedIssues(issues []Issue) []Issue {
 	var out []Issue
 	for _, i := range issues {
 		if i.IsOpen() && i.Untriaged() {
+			out = append(out, i)
+		}
+	}
+	sort.SliceStable(out, func(a, b int) bool { return out[a].Number < out[b].Number })
+	return out
+}
+
+// Children returns the issues whose parent is the given epic, oldest first.
+// It is derived from parent backlinks over the full fetched set, so it stays
+// complete even when the epic's sub-issue connection was capped — unlike the
+// epic's own SubIssues refs.
+func Children(issues []Issue, epic int) []Issue {
+	var out []Issue
+	for _, i := range issues {
+		if i.Parent != nil && i.Parent.Number == epic {
 			out = append(out, i)
 		}
 	}

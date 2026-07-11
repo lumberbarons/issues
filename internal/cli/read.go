@@ -25,7 +25,9 @@ func (a *App) Ready(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, w := range model.WarningsOfKind(model.Warnings(issues), model.WarnDependencyCycle) {
+	// A cycle or a truncated blocker list can make ready wrong; surface both
+	// so the agent knows the queue may be incomplete.
+	for _, w := range model.WarningsOfKind(model.Warnings(issues), model.WarnDependencyCycle, model.WarnBlockersCapped) {
 		a.warnf("%s", render.FormatWarning(w))
 	}
 	ready := model.Ready(issues)
@@ -179,9 +181,10 @@ func (a *App) EpicStatus(ctx context.Context, number int) error {
 	if !epic.IsEpic() {
 		return genericErr("#%d has no sub-issues; not an epic", number)
 	}
+	children := model.Children(issues, number)
 	if a.JSON {
-		return render.JSONEpicStatus(a.Out, epic, byNum)
+		return render.JSONEpicStatus(a.Out, epic, children)
 	}
-	render.EpicStatus(a.Out, epic, byNum)
+	render.EpicStatus(a.Out, epic, children)
 	return nil
 }

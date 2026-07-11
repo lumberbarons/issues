@@ -116,6 +116,7 @@ func TestShow(t *testing.T) {
 		Comments: []model.Comment{
 			{Author: "alice", CreatedAt: ts(7), Body: "repro attached"},
 		},
+		CommentsTotal: 12,
 	}
 	var buf bytes.Buffer
 	Show(&buf, i)
@@ -149,17 +150,13 @@ func TestEpicStatus(t *testing.T) {
 		Number: 137, Title: "Epic: Voltgo", State: "OPEN", CreatedAt: ts(5),
 		Labels:         []string{"P2"},
 		SubIssuesTotal: 3, SubIssuesCompleted: 1,
-		SubIssues: []model.Ref{
-			{Number: 120, State: "OPEN"},
-			{Number: 121, State: "CLOSED"},
-			{Number: 999, State: "OPEN"}, // not in the fetched set
-		},
 	}
-	byNum := model.ByNumber(append(fixtureIssues(), model.Issue{
-		Number: 121, Title: "Done child", State: "CLOSED", Labels: []string{"P2", "task"},
-	}))
+	children := []model.Issue{
+		{Number: 120, Title: "Open child", State: "OPEN", Labels: []string{"P1", "bug"}},
+		{Number: 121, Title: "Done child", State: "CLOSED", Labels: []string{"P2", "task"}},
+	}
 	var buf bytes.Buffer
-	EpicStatus(&buf, epic, byNum)
+	EpicStatus(&buf, epic, children)
 	checkGolden(t, "epic_status", buf.Bytes())
 }
 
@@ -231,8 +228,9 @@ func TestJSONIssue(t *testing.T) {
 	i := model.Issue{
 		Number: 42, Title: "T", State: "OPEN", CreatedAt: ts(6),
 		Labels:   []string{"P1", "bug"},
-		Body:     "body here",
-		Comments: []model.Comment{{Author: "alice", CreatedAt: ts(7), Body: "hi"}},
+		Body:          "body here",
+		Comments:      []model.Comment{{Author: "alice", CreatedAt: ts(7), Body: "hi"}},
+		CommentsTotal: 3,
 	}
 	var buf bytes.Buffer
 	if err := JSONIssue(&buf, i); err != nil {
@@ -290,11 +288,13 @@ func TestJSONEpicStatus(t *testing.T) {
 		Number: 137, Title: "Epic: Voltgo", State: "OPEN", CreatedAt: ts(5),
 		Labels:         []string{"P2"},
 		SubIssuesTotal: 2, SubIssuesCompleted: 1,
-		SubIssues: []model.Ref{{Number: 120, State: "OPEN"}, {Number: 999, State: "CLOSED"}},
 	}
-	byNum := model.ByNumber(fixtureIssues())
+	children := []model.Issue{
+		{Number: 120, Title: "Open child", State: "OPEN", CreatedAt: ts(4), Labels: []string{"P1", "bug"}},
+		{Number: 121, Title: "Done child", State: "CLOSED", CreatedAt: ts(3), Labels: []string{"P2", "task"}},
+	}
 	var buf bytes.Buffer
-	if err := JSONEpicStatus(&buf, epic, byNum); err != nil {
+	if err := JSONEpicStatus(&buf, epic, children); err != nil {
 		t.Fatal(err)
 	}
 	checkGolden(t, "epic_status_json", buf.Bytes())

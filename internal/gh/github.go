@@ -109,7 +109,8 @@ type issueNode struct {
 		Nodes      []refNode `json:"nodes"`
 	} `json:"blockedBy"`
 	Comments struct {
-		Nodes []struct {
+		TotalCount int `json:"totalCount"`
+		Nodes      []struct {
 			Author *struct {
 				Login string `json:"login"`
 			} `json:"author"`
@@ -136,6 +137,7 @@ func (n issueNode) toModel() model.Issue {
 		SubIssuesTotal:     n.SubIssues.TotalCount,
 		SubIssuesCompleted: n.SubIssuesSummary.Completed,
 		BlockedByTotal:     n.BlockedBy.TotalCount,
+		CommentsTotal:      n.Comments.TotalCount,
 	}
 	for _, l := range n.Labels.Nodes {
 		i.Labels = append(i.Labels, l.Name)
@@ -214,7 +216,7 @@ func (g *GitHub) GetIssue(ctx context.Context, number int) (model.Issue, error) 
 		repository(owner: $owner, name: $name) {
 			issue(number: $number) {%s
 				body
-				comments(last: %d) { nodes { author { login } createdAt body } }
+				comments(last: %d) { totalCount nodes { author { login } createdAt body } }
 			}
 		}
 	}`, issueFields, commentCap)

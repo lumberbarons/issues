@@ -212,6 +212,18 @@ func TestUntriagedIssuesOldestFirst(t *testing.T) {
 	}
 }
 
+func TestChildren(t *testing.T) {
+	epicNum := 10
+	c1 := Issue{Number: 12, State: "OPEN", Parent: &Ref{Number: epicNum}}
+	c2 := Issue{Number: 11, State: "CLOSED", Parent: &Ref{Number: epicNum}}
+	other := Issue{Number: 13, State: "OPEN", Parent: &Ref{Number: 99}}
+	orphan := Issue{Number: 14, State: "OPEN"}
+	got := Children([]Issue{c1, c2, other, orphan}, epicNum)
+	if len(got) != 2 || got[0].Number != 11 || got[1].Number != 12 {
+		t.Errorf("Children() = %v, want #11 then #12", got)
+	}
+}
+
 func TestByNumber(t *testing.T) {
 	m := ByNumber([]Issue{open(1), open(2)})
 	if len(m) != 2 || m[2].Number != 2 {

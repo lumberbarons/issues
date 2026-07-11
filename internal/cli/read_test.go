@@ -56,6 +56,23 @@ func TestReadyWarnsOnCycle(t *testing.T) {
 	}
 }
 
+func TestReadyWarnsOnTruncatedBlockers(t *testing.T) {
+	// The fetched blocker is closed (so #1 looks ready), but the server says
+	// there are more blockers than were fetched — ready may be wrong, and the
+	// command must say so.
+	a := issue(1, "A", "P2", "bug")
+	a.BlockedBy = []model.Ref{{Number: 2, State: "CLOSED"}}
+	a.BlockedByTotal = 25
+	f := newFake(a)
+	app, _, errOut := newApp(f)
+	if err := app.Ready(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut.String(), "#1 has 25 blockers, only 1 fetched") {
+		t.Errorf("stderr = %q", errOut.String())
+	}
+}
+
 func TestReadyJSON(t *testing.T) {
 	f := newFake(issue(1, "Work", "P2", "bug"))
 	app, out, _ := newApp(f)
@@ -325,6 +342,27 @@ func TestEpicStatusOne(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("EpicStatus missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestEpicStatusUsesBacklinksNotCappedSubIssues(t *testing.T) {
+	// The epic's sub-issue connection was capped: it lists only #11, but the
+	// server total is higher. #12 reaches the view via its parent backlink,
+	// not the (incomplete) SubIssues refs.
+	epicIssue := issue(10, "Epic: big", "P2")
+	epicIssue.SubIssues = []model.Ref{{Number: 11, State: "OPEN"}}
+	epicIssue.SubIssuesTotal = 2
+	child := issue(11, "Child", "P2", "task")
+	child.Parent = &model.Ref{Number: 10, State: "OPEN"}
+	missing := issue(12, "Uncapped child", "P2", "task")
+	missing.Parent = &model.Ref{Number: 10, State: "OPEN"}
+	f := newFake(epicIssue, child, missing)
+	app, out, _ := newApp(f)
+	if err := app.EpicStatus(ctx, 10); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "#12") {
+		t.Errorf("child absent from capped SubIssues was dropped:\n%s", out.String())
 	}
 }
 
