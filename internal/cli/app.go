@@ -55,3 +55,13 @@ func (a *App) printf(format string, args ...any) {
 func (a *App) warnf(format string, args ...any) {
 	fmt.Fprintf(a.ErrOut, "⚠ "+format+"\n", args...)
 }
+
+// progressf narrates long-running work: stdout normally, stderr under
+// --json so the machine-readable stream stays clean.
+func (a *App) progressf(format string, args ...any) {
+	if a.JSON {
+		fmt.Fprintf(a.ErrOut, format, args...)
+		return
+	}
+	fmt.Fprintf(a.Out, format, args...)
+}
