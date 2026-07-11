@@ -1,21 +1,20 @@
 // Command issues is an agentic-first CLI for GitHub Issues. All behavior
-// lives in internal/; this file is flag wiring and exit-code mapping.
+// lives in internal/; this file is flag wiring — parsing, exit-code mapping,
+// and editor invocation are delegated to internal packages so they can be
+// tested.
 package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
 	ucli "github.com/urfave/cli/v3"
 
 	appcli "github.com/lumberbarons/issues/internal/cli"
+	"github.com/lumberbarons/issues/internal/editor"
 	"github.com/lumberbarons/issues/internal/gh"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
@@ -27,16 +26,7 @@ var version = "dev"
 func main() {
 	if err := root().Run(context.Background(), os.Args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		code := appcli.ExitGeneric
-		var exitErr *appcli.ExitError
-		var authErr *gh.AuthError
-		switch {
-		case errors.As(err, &exitErr):
-			code = exitErr.Code
-		case errors.As(err, &authErr):
-			code = appcli.ExitAuth
-		}
-		os.Exit(code)
+		os.Exit(appcli.ExitCode(err))
 	}
 }
 
@@ -50,13 +40,13 @@ func globalFlags() []ucli.Flag {
 }
 
 func buildApp(cmd *ucli.Command) (*appcli.App, error) {
-	repo := gh.Repo{}
+	var repo gh.Repo
 	if spec := cmd.String("repo"); spec != "" {
-		owner, name, ok := strings.Cut(spec, "/")
-		if !ok || owner == "" || name == "" {
-			return nil, &appcli.ExitError{Code: appcli.ExitUsage, Message: "--repo must be owner/name"}
+		parsed, err := appcli.ParseRepoSpec(spec)
+		if err != nil {
+			return nil, err
 		}
-		repo.Owner, repo.Name = owner, name
+		repo = parsed
 	} else {
 		current, err := repository.Current()
 		if err != nil {
@@ -74,46 +64,13 @@ func buildApp(cmd *ucli.Command) (*appcli.App, error) {
 		Out:    os.Stdout,
 		ErrOut: os.Stderr,
 		JSON:   cmd.Bool("json"),
-		Edit:   editWithEditor,
+		Edit:   editor.Edit,
 	}, nil
 }
 
 // numberArg parses the required positional issue number.
 func numberArg(cmd *ucli.Command, usage string) (int, error) {
-	arg := cmd.Args().First()
-	if arg == "" {
-		return 0, &appcli.ExitError{Code: appcli.ExitUsage, Message: "usage: " + usage}
-	}
-	n, err := strconv.Atoi(strings.TrimPrefix(arg, "#"))
-	if err != nil || n <= 0 {
-		return 0, &appcli.ExitError{Code: appcli.ExitUsage, Message: fmt.Sprintf("invalid issue number %q", arg)}
-	}
-	return n, nil
-}
-
-func editWithEditor(initial string) (string, error) {
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		return "", errors.New("$EDITOR is not set")
-	}
-	tmp, err := os.CreateTemp("", "issues-*.md")
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.WriteString(initial); err != nil {
-		return "", err
-	}
-	if err := tmp.Close(); err != nil {
-		return "", err
-	}
-	run := exec.Command("sh", "-c", editor+" "+tmp.Name())
-	run.Stdin, run.Stdout, run.Stderr = os.Stdin, os.Stdout, os.Stderr
-	if err := run.Run(); err != nil {
-		return "", err
-	}
-	edited, err := os.ReadFile(tmp.Name())
-	return string(edited), err
+	return appcli.ParseIssueNumber(cmd.Args().First(), usage)
 }
 
 func root() *ucli.Command {
