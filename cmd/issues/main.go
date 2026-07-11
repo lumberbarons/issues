@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	ucli "github.com/urfave/cli/v3"
 
@@ -123,7 +125,7 @@ func root() *ucli.Command {
 		Commands: []*ucli.Command{
 			primeCmd(), readyCmd(), listCmd(), showCmd(), createCmd(),
 			startCmd(), triageCmd(), setCmd(), closeCmd(), blockCmd(),
-			unblockCmd(), epicCmd(), initCmd(), hooksCmd(),
+			unblockCmd(), epicCmd(), initCmd(), hooksCmd(), migrateCmd(),
 		},
 	}
 }
@@ -466,6 +468,55 @@ func hooksCmd() *ucli.Command {
 						return err
 					}
 					return app.HooksRemove(root)
+				},
+			},
+		},
+	}
+}
+
+func migrateCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:  "migrate",
+		Usage: "import issues from another tracker",
+		Commands: []*ucli.Command{
+			{
+				Name:  "beads",
+				Usage: "migrate a beads (bd) database: labels, deps, epics, in-progress state",
+				Flags: append(globalFlags(),
+					&ucli.StringFlag{Name: "file", Usage: "beads snapshot (default: <project>/.beads/issues.jsonl)"},
+					&ucli.StringFlag{Name: "state", Usage: "resume-state `FILE` (default: alongside the snapshot)"},
+					&ucli.BoolFlag{Name: "dry-run", Usage: "print the plan without creating anything"},
+					&ucli.BoolFlag{Name: "include-closed", Usage: "also migrate closed beads (create, comment, close)"},
+					&ucli.DurationFlag{Name: "throttle", Usage: "pause between writes", Value: 500 * time.Millisecond},
+				),
+				Action: func(ctx context.Context, cmd *ucli.Command) error {
+					file := cmd.String("file")
+					if file == "" {
+						cwd, err := os.Getwd()
+						if err != nil {
+							return err
+						}
+						root, err := appcli.FindProjectRoot(cwd)
+						if err != nil {
+							return fmt.Errorf("%w (or pass --file)", err)
+						}
+						file = filepath.Join(root, ".beads", "issues.jsonl")
+					}
+					state := cmd.String("state")
+					if state == "" {
+						state = filepath.Join(filepath.Dir(file), "github-migration.json")
+					}
+					app, err := buildApp(cmd)
+					if err != nil {
+						return err
+					}
+					return app.MigrateBeads(ctx, appcli.MigrateOpts{
+						File:          file,
+						StatePath:     state,
+						DryRun:        cmd.Bool("dry-run"),
+						IncludeClosed: cmd.Bool("include-closed"),
+						Throttle:      cmd.Duration("throttle"),
+					})
 				},
 			},
 		},

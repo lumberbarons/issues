@@ -57,6 +57,9 @@ issues epic create --title "..." [--children N,N]
 issues epic status [<n>]
 issues init
 issues hooks install|remove      # Claude Code SessionStart hook running `issues prime`
+issues migrate beads [--dry-run] [--include-closed]
+                                 # import a beads (bd) database: priorities, types,
+                                 # deps, epics, in-progress state; resumable
 ```
 
 Output is one compact line per issue, annotated with whatever keeps it from
