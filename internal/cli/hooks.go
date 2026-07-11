@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/lumberbarons/issues/internal/render"
 )
 
 // primeHookCommand is what the SessionStart hook runs; its stdout is
@@ -53,15 +51,13 @@ func (a *App) HooksInstall(projectRoot string) error {
 			return err
 		}
 	}
-	if a.JSON {
-		return render.WriteJSON(a.Out, map[string]any{"installed": changed, "path": path})
-	}
-	if changed {
-		a.printf("installed %s hook running `%s` in %s\n", hookEvent, primeHookCommand, path)
-	} else {
-		a.printf("%s hook already installed in %s\n", hookEvent, path)
-	}
-	return nil
+	return a.emitResult(map[string]any{"installed": changed, "path": path}, func() {
+		if changed {
+			a.printf("installed %s hook running `%s` in %s\n", hookEvent, primeHookCommand, path)
+		} else {
+			a.printf("%s hook already installed in %s\n", hookEvent, path)
+		}
+	})
 }
 
 // HooksRemove strips the `issues prime` hook again, pruning any structures
@@ -78,15 +74,13 @@ func (a *App) HooksRemove(projectRoot string) error {
 			return err
 		}
 	}
-	if a.JSON {
-		return render.WriteJSON(a.Out, map[string]any{"removed": changed, "path": path})
-	}
-	if changed {
-		a.printf("removed %s hook from %s\n", hookEvent, path)
-	} else {
-		a.printf("no %s hook found in %s\n", hookEvent, path)
-	}
-	return nil
+	return a.emitResult(map[string]any{"removed": changed, "path": path}, func() {
+		if changed {
+			a.printf("removed %s hook from %s\n", hookEvent, path)
+		} else {
+			a.printf("no %s hook found in %s\n", hookEvent, path)
+		}
+	})
 }
 
 func settingsPath(projectRoot string) string {

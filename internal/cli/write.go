@@ -173,11 +173,7 @@ func (a *App) Start(ctx context.Context, number int, priorityFlag string, force 
 	if len(after.Assignees) != 1 || after.Assignees[0] != viewer {
 		a.warnf("claim may have raced: #%d now assigned to @%s", number, strings.Join(after.Assignees, " @"))
 	}
-	if a.JSON {
-		return render.JSONIssue(a.Out, after)
-	}
-	a.printf("started #%d: %s\n", number, issue.Title)
-	return nil
+	return a.emitMutation(after, "started #%d: %s\n", number, issue.Title)
 }
 
 // SetOpts are the retriage/edit inputs; zero values mean "leave alone".
@@ -340,11 +336,7 @@ func (a *App) Close(ctx context.Context, number int, reason string, completed bo
 		// a clean redo — re-running would post the comment a second time.
 		return fmt.Errorf("posted the reason comment on #%d but closing it failed (a retry will comment again): %w", number, err)
 	}
-	if a.JSON {
-		return a.reportMutation(ctx, number, "")
-	}
-	a.printf("closed #%d (%s)\n", number, strings.ToLower(strings.ReplaceAll(stateReason, "_", " ")))
-	return nil
+	return a.reportMutation(ctx, number, "closed #%d (%s)\n", number, strings.ToLower(strings.ReplaceAll(stateReason, "_", " ")))
 }
 
 // Block adds a native dependency after a transitive client-side cycle
@@ -454,20 +446,18 @@ func (a *App) Init(ctx context.Context) error {
 		}
 		created = append(created, l.Name)
 	}
-	if a.JSON {
-		if created == nil {
-			created = []string{}
+	if created == nil {
+		created = []string{}
+	}
+	return a.emitResult(map[string]any{"createdLabels": created}, func() {
+		if len(created) == 0 {
+			a.printf("all convention labels already exist in %s\n", a.Repo)
+		} else {
+			a.printf("created labels: %s\n", strings.Join(created, ", "))
 		}
-		return render.WriteJSON(a.Out, map[string]any{"createdLabels": created})
-	}
-	if len(created) == 0 {
-		a.printf("all convention labels already exist in %s\n", a.Repo)
-	} else {
-		a.printf("created labels: %s\n", strings.Join(created, ", "))
-	}
-	a.printf("\nAdd to CLAUDE.md:\n\n%s\n", conventions.ClaudeSnippet)
-	a.printf("\nOr let a hook inject the primer automatically: issues hooks install\n")
-	return nil
+		a.printf("\nAdd to CLAUDE.md:\n\n%s\n", conventions.ClaudeSnippet)
+		a.printf("\nOr let a hook inject the primer automatically: issues hooks install\n")
+	})
 }
 
 // swapPriority enforces the one-priority-label invariant: remove the
@@ -490,18 +480,16 @@ func (a *App) swapPriority(ctx context.Context, issue model.Issue, p model.Prior
 // reportMutation prints the text confirmation, or re-fetches for the full
 // flat schema when --json is on.
 func (a *App) reportMutation(ctx context.Context, number int, format string, args ...any) error {
-	if a.JSON {
-		after, err := a.Client.GetIssue(ctx, number)
-		if err != nil {
-			// The mutation itself succeeded; only the confirmation re-fetch
-			// failed. Say so, so a caller doesn't read a non-zero exit as
-			// "the change didn't happen" and retry into a duplicate.
-			return fmt.Errorf("#%d was updated, but fetching the result for --json failed: %w", number, err)
-		}
-		return render.JSONIssue(a.Out, after)
-	}
-	if format != "" {
+	if !a.JSON {
 		a.printf(format, args...)
+		return nil
 	}
-	return nil
+	after, err := a.Client.GetIssue(ctx, number)
+	if err != nil {
+		// The mutation itself succeeded; only the confirmation re-fetch
+		// failed. Say so, so a caller doesn't read a non-zero exit as
+		// "the change didn't happen" and retry into a duplicate.
+		return fmt.Errorf("#%d was updated, but fetching the result for --json failed: %w", number, err)
+	}
+	return a.emitMutation(after, format, args...)
 }

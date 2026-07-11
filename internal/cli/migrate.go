@@ -12,7 +12,6 @@ import (
 	"github.com/lumberbarons/issues/internal/conventions"
 	"github.com/lumberbarons/issues/internal/gh"
 	"github.com/lumberbarons/issues/internal/model"
-	"github.com/lumberbarons/issues/internal/render"
 )
 
 // MigrateOpts configure the beads migration.
@@ -100,19 +99,17 @@ func (a *App) MigrateBeads(ctx context.Context, opts MigrateOpts) error {
 	wired, warned := a.migrateWire(ctx, selected, state, opts)
 	closed := a.migrateClose(ctx, selected, state, opts)
 
-	if a.JSON {
-		return render.WriteJSON(a.Out, map[string]any{
-			"created": created, "wired": wired, "closed": closed,
-			"skippedClosed": skippedClosed, "warnings": warned,
-			"mapping": state,
-		})
-	}
-	a.printf("migrated %d beads: %d created, %d dependencies wired, %d closed", len(selected), created, wired, closed)
-	if skippedClosed > 0 {
-		a.printf(" (%d closed beads skipped; use --include-closed)", skippedClosed)
-	}
-	a.printf("\nmapping saved to %s\n", opts.StatePath)
-	return nil
+	return a.emitResult(map[string]any{
+		"created": created, "wired": wired, "closed": closed,
+		"skippedClosed": skippedClosed, "warnings": warned,
+		"mapping": state,
+	}, func() {
+		a.printf("migrated %d beads: %d created, %d dependencies wired, %d closed", len(selected), created, wired, closed)
+		if skippedClosed > 0 {
+			a.printf(" (%d closed beads skipped; use --include-closed)", skippedClosed)
+		}
+		a.printf("\nmapping saved to %s\n", opts.StatePath)
+	})
 }
 
 // migrationPlan prints what a real run would do.

@@ -93,6 +93,42 @@ func TestReadyJSON(t *testing.T) {
 	}
 }
 
+func TestJSONFramingIsConsistent(t *testing.T) {
+	// The contract: a collection is NDJSON (one object per line); a single
+	// issue is one object. Lock both so neither drifts to the other's shape.
+	f := newFake(issue(1, "One", "P2", "bug"), issue(2, "Two", "P1", "bug"))
+
+	listApp, listOut, _ := newApp(f)
+	listApp.JSON = true
+	if err := listApp.List(ctx, ListOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(listOut.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("list --json should be 2 NDJSON lines, got %d:\n%s", len(lines), listOut.String())
+	}
+	for _, ln := range lines {
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(ln), &obj); err != nil {
+			t.Fatalf("list line is not a JSON object: %v\n%s", err, ln)
+		}
+	}
+
+	showApp, showOut, _ := newApp(f)
+	showApp.JSON = true
+	if err := showApp.Show(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	// A single object parses whole and is not line-delimited NDJSON.
+	var one map[string]any
+	if err := json.Unmarshal(showOut.Bytes(), &one); err != nil {
+		t.Fatalf("show --json should be one JSON object: %v\n%s", err, showOut.String())
+	}
+	if one["number"].(float64) != 1 {
+		t.Errorf("show --json = %s", showOut.String())
+	}
+}
+
 func TestListFilters(t *testing.T) {
 	epicIssue := issue(10, "Epic: big", "P2")
 	child := issue(11, "Child", "P2", "task")
