@@ -15,7 +15,9 @@ issues via `Fixes #n`, and nothing needs syncing.
 curl -fsSL https://raw.githubusercontent.com/lumberbarons/issues/main/install.sh | bash
 ```
 
-or, with a Go toolchain:
+Installs to `~/.local/bin` (override with `INSTALL_DIR`); never uses sudo.
+
+Or, with a Go toolchain (1.25+):
 
 ```sh
 go install github.com/lumberbarons/issues/cmd/issues@latest
@@ -36,6 +38,14 @@ issues start 42      # claim it: assign @me + in-progress (refuses claimed work,
 # ...branch, PR with "Fixes #42"...
 ```
 
+`issues ready` prints one line per issue, so you can tell it worked:
+
+```
+#42 P1 bug  Retry loop hammers the API when offline
+```
+
+If any command exits `4`, authenticate first with `gh auth login`.
+
 ## Commands
 
 ```
@@ -45,7 +55,7 @@ issues list [--label X] [--epic N] [--closed]
 issues show <n>                   # body, deps, parent, children, recent comments
 issues create --type bug|enhancement|task --title "..."
               [--priority P0..P4] [--area X] [--blocked-by N] [--parent N]
-              [--discovered-from N] [--body-file F | --edit]
+              [--discovered-from N] [--body-file F | --edit]  # --edit opens $EDITOR
 issues start <n> [--priority P0..P4] [--force]
 issues triage                     # issues missing priority/type labels
 issues set <n> [--priority ..] [--type ..] [--add-area X] [--remove-area X]
@@ -57,16 +67,20 @@ issues epic create --title "..." [--children N,N]
 issues epic status [<n>]
 issues init
 issues hooks install|remove      # Claude Code SessionStart hook running `issues prime`
-issues migrate beads [--dry-run] [--include-closed]
+issues migrate beads [--file F] [--state F] [--throttle D]
+                     [--dry-run] [--include-closed]
                                  # import a beads (bd) database: priorities, types,
                                  # deps, epics, in-progress state; resumable
+                                 # defaults: --file .beads/issues.jsonl, --state
+                                 # github-migration.json next to it, --throttle 500ms
 ```
 
 Output is one compact line per issue, annotated with whatever keeps it from
 being plain ready work (`[blocked by #120]`, `[epic 2/6]`, `[in progress @you]`);
 `list` sorts ready work first, then claimed, blocked, and epics. Every command
 takes `--json` (stable flat schema; list commands emit NDJSON so output survives
-truncation and grep) and `--repo owner/name`. Exit codes are meaningful: `3`
+truncation and grep); every GitHub-touching command also takes `--repo owner/name`
+(`hooks` is local-only). Exit codes are meaningful: `3`
 means "already claimed, pick the next ready item", `4` means "run `gh auth login`".
 
 ## Design
