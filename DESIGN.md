@@ -52,7 +52,8 @@ never hidden, never auto-"repaired". `prime` *teaches* the conventions.
 - **No title prefixes** — type/priority/area live in labels. Exception: `Epic: ` on
   parent issues, added by the tool.
 - **Dependencies are native** (`--blocked-by`), never body text. The tool refuses to
-  create cycles.
+  create cycles — GitHub itself only rejects self-blocks and direct two-issue
+  cycles, not longer ones (see spike results).
 - **Epics are sub-issue trees.** Epics are never worked directly; `ready` excludes
   them.
 - **Discovered work** links back: `Discovered while working on #123` in the body,
@@ -71,9 +72,10 @@ never hidden, never auto-"repaired". `prime` *teaches* the conventions.
   triage` lists them so a human or agent can label each via `set`; nothing is ever
   stamped with defaults automatically, since auto-labeling someone else's report
   destroys information.
-- **Contradictions** (two priority labels, an in-progress epic) are the only
-  per-issue warnings `prime` emits; normalization still picks a deterministic
-  answer in the meantime.
+- **Contradictions** (two priority labels, an in-progress epic, a dependency cycle)
+  are the only per-issue warnings `prime` emits; normalization still picks a
+  deterministic answer in the meantime. Cycles matter most: their members all have
+  open blockers, so they'd otherwise drop out of `ready` without a trace.
 
 ### Read-path normalization
 
@@ -136,7 +138,8 @@ maintaining hand-written workflow prose. Three parts:
    hundred tokens, including the tool's own command cheatsheet.
 2. **Live state** — ready work (top N by priority), in-progress issues and their
    assignee, epics with progress (`#137 Voltgo 2/6`), and open-blocker counts.
-3. **Warnings** — contradictions only (`⚠ #42 has two priority labels`). Absences
+3. **Warnings** — contradictions only (`⚠ #42 has two priority labels`,
+   `⚠ dependency cycle #3 → #4 → #5 → #3: none will be ready`). Absences
    are not warnings: untriaged work rolls up to a single line (`7 untriaged →
    issues triage`), so a public repo full of drive-by reports doesn't drown the
    primer. Section omitted entirely when the repo is clean.
@@ -258,24 +261,28 @@ any product code.
   measures ~640 tokens (tiktoken `o200k_base`; Claude's tokenizer typically runs
   slightly higher). The split is roughly half static, half live, so the ~600 target
   holds as long as live sections cap at top-N per section.
-- **Cycle rejection — unverified.** Whether `addBlockedBy` refuses circular
-  dependencies server-side is undocumented: the
-  [dependency docs](https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/creating-issue-dependencies)
-  are silent, and the REST `POST .../dependencies/blocked_by` endpoint lists only a
-  generic `422 Validation failed`. Needs an empirical test in a scratch repo: create
-  A←B, attempt B←A, attempt a longer A←B←C←A chain, attempt a self-block. Until
-  proven, client-side cycle detection stays in `internal/model`; if the API rejects
-  cycles, it shrinks to rendering the server error nicely.
+- **Cycle rejection — partial; client-side check confirmed necessary.** Tested live
+  with throwaway issues (deleted afterwards). The API rejects self-blocks (`Target
+  issue cannot be the same as the source issue`) and direct two-issue cycles (`this
+  dependency would create a cycle where the target is already blocked by the
+  source`) as typed GraphQL `VALIDATION` errors — but **accepted a three-issue
+  cycle** (A←B, B←C, then C←A) without complaint: the edges are stored, returned by
+  `blockedBy`, and counted by `issueDependenciesSummary` as if nothing were wrong.
+  Two consequences. First, `block` and `create --blocked-by` must run a transitive
+  cycle check client-side before mutating — the fetch-everything query already has
+  the whole graph. Second, since cycles can be created outside the tool (web UI,
+  raw API), the read path must detect them too: every member of a cycle has an open
+  blocker, so a cycle silently excludes all its members from `ready` forever.
+  `prime` and `ready` warn when they see one.
 
 ## Milestones
 
 - **M0 — scaffold**: module, urfave/cli v3 skeleton, go-gh auth + repo detection,
   `issues list` (proves the GraphQL query and renderer end-to-end). The query
   includes `parent`/`subIssues`/`blockedBy` from day one — field names, header
-  requirements, and nested-cap behavior are already verified (see spike results);
-  the one API unknown left for this milestone is whether `addBlockedBy` rejects
-  dependency cycles natively (if it does, our cycle check is just a friendlier
-  error). CI (lint + full tests) arrives with the scaffold.
+  requirements, nested-cap behavior, and cycle semantics are all verified (see
+  spike results), so this milestone has no API unknowns left. CI (lint + full
+  tests) arrives with the scaffold.
 - **M1 — read**: `ready`, `show`, `epic status`, `prime` v1. *This is the payoff
   milestone — adopt in solar-controller immediately.* The first tagged release
   (goreleaser + install.sh) ships here, since adoption needs an installable binary.
