@@ -27,7 +27,7 @@ session re-derives the same jq pipelines from scratch.
 | `bd ready` — zero open blockers | `issues ready` | `blockedBy` (native dependencies), filtered + priority-sorted |
 | `bd prime` — session-start context injection | `issues prime` | generated from live repo state + built-in conventions |
 | hierarchical IDs (`bd-a3f8.1`) for epics | `issues epic` | native sub-issues (`parent` / `subIssues`) |
-| `bd update --claim` — atomic assign + in-progress | `issues start` | assign `@me` + `in-progress` label |
+| `bd update --claim` — claim: assign + in-progress | `issues start` | assign `@me` + `in-progress` label |
 | priorities 0–4 | P0–P4 labels | labels (issue *types* are org-only; labels work on personal repos) |
 | token-lean, JSON-optional output | same | `--json` on every command, compact text default |
 | `bd remember` — persistent insights | deferred (open question) | overlaps with Claude Code's own memory system |
@@ -57,19 +57,28 @@ prose into code. The tool *enforces* them; `prime` *teaches* them.
   `### Done when` (checklist). Scaffolded by `create`, sections omitted when empty.
 - **Workflow**: `ready` → `start` → branch (`feat/`|`fix/`|`chore/`) → PR with
   `Fixes #n`. Closing via PR is the norm; `close` is for wontfix/duplicate.
+- **Drift**: the tool enforces conventions on its own write paths, but the web UI
+  can still violate them (two priority labels, missing type, epic worked directly).
+  `prime` warns about violations it sees — it already has the data. A fuller
+  `doctor --fix` is deferred to M4.
 
 ## Command surface (v1)
 
 ```
 issues prime                      # session-start context (see below)
-issues ready                      # unblocked, non-epic, open; sorted P0→P4, then oldest
+issues ready                      # open, non-epic, zero *open* blockers; sorted P0→P4, then oldest
 issues list [--label X] [--epic N] [--closed]
 issues show <n>                   # detail: body, deps, parent, children, recent comments
 issues create --type bug|enhancement|task [--priority P0..P4] [--area X]
               [--blocked-by N...] [--parent N] [--discovered-from N]
               --title "..." [--body-file F | --edit]
 issues start <n>                  # claim: assign @me, add in-progress label
-issues close <n> --reason "..."   # comment + close (not-planned unless --completed)
+issues set <n> [--priority P0..P4] [--type bug|enhancement|task] [--add-area X]
+           [--remove-area X] [--parent N | --no-parent] [--title "..."]
+                                  # retriage/edit within conventions (swaps the old
+                                  # priority/type label, never stacks a second one)
+issues close <n> --reason "..."   # comment + close (not-planned unless --completed
+                                  # or --duplicate-of M)
 issues block <n> --on <m>         # add dependency (cycle-checked)
 issues unblock <n> --from <m>
 issues epic create --title "..." [--children N,N,N]
@@ -84,12 +93,15 @@ Global flags: `--json` (structured output, stable schema), `--repo owner/name`
 
 The session-start ritual, modeled on `bd prime`: one command whose output an agent
 injects at the top of a session (via CLAUDE.md instruction or hook) instead of
-maintaining hand-written workflow prose. Two parts:
+maintaining hand-written workflow prose. Three parts:
 
 1. **Static primer** — the conventions and workflow above, compressed to a few
    hundred tokens, including the tool's own command cheatsheet.
 2. **Live state** — ready work (top N by priority), in-progress issues and their
    assignee, epics with progress (`#137 Voltgo 2/6`), and open-blocker counts.
+3. **Warnings** — convention violations spotted in the fetched data (`⚠ #42 has two
+   priority labels`). Section omitted entirely when the repo is clean, which is the
+   normal case.
 
 Sketch:
 
@@ -146,15 +158,21 @@ typical repo.
 ## Milestones
 
 - **M0 — scaffold**: module, urfave/cli v3 skeleton, go-gh auth + repo detection,
-  `issues list` (proves the GraphQL query and renderer end-to-end).
+  `issues list` (proves the GraphQL query and renderer end-to-end). The query must
+  include `parent`/`subIssues`/`blockedBy` from day one — this milestone verifies
+  the exact field names, any feature headers, and whether the API rejects dependency
+  cycles natively (if it does, our cycle check is just a friendlier error).
 - **M1 — read**: `ready`, `show`, `epic status`, `prime` v1. *This is the payoff
   milestone — adopt in solar-controller immediately.*
-- **M2 — write**: `create` (template + label enforcement), `block`/`unblock` with
+- **M2 — write**: `create` (template + label enforcement), `set` (retriage —
+  priority changes are the most common tracker operation, and doing them through
+  the tool is what keeps the one-label invariants true), `block`/`unblock` with
   cycle detection, `start`, `close`, `epic create`.
 - **M3 — bootstrap**: `init` (create label set in a fresh repo, emit the CLAUDE.md
   snippet that says little more than "run `issues prime`"). Replace solar-controller's
   hand-written conventions section with it.
-- **M4 — polish**: `--json` everywhere, pagination hardening, maybe a read cache,
+- **M4 — polish**: `--json` everywhere, `doctor --fix` (bulk convention repair, if
+  drift turns out to happen in practice), pagination hardening, maybe a read cache,
   maybe `remember`, maybe a `gh` extension alias (`gh-issues`) for distribution.
 
 ## Open questions
