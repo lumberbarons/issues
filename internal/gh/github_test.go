@@ -310,6 +310,20 @@ func TestGetIssueGraphQLNotResolve(t *testing.T) {
 	}
 }
 
+func TestGetIssueRepositoryNotFound(t *testing.T) {
+	f := newFakeServer(t)
+	// A missing/inaccessible repo fails to resolve at the repository path,
+	// not the issue path — the message must blame the repo, not the issue.
+	f.graphql["issue(number:"] = `{"data":{"repository":null},"errors":[{"type":"NOT_FOUND","path":["repository"],"message":"Could not resolve to a Repository with the name 'o/r'."}]}`
+	_, err := f.client(t).GetIssue(context.Background(), 5)
+	if err == nil || !strings.Contains(err.Error(), "repository o/r not found") {
+		t.Fatalf("err = %v", err)
+	}
+	if strings.Contains(err.Error(), "issue #5") {
+		t.Fatalf("repository error misreported as missing issue: %v", err)
+	}
+}
+
 func TestViewerAuthError(t *testing.T) {
 	f := newFakeServer(t)
 	f.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

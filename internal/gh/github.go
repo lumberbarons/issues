@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strings"
 	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
@@ -227,9 +226,8 @@ func (g *GitHub) GetIssue(ctx context.Context, number int) (model.Issue, error) 
 	}
 	vars := map[string]any{"owner": g.repo.Owner, "name": g.repo.Name, "number": number}
 	if err := g.gql.DoWithContext(ctx, query, vars, &resp); err != nil {
-		var gqlErr *api.GraphQLError
-		if errors.As(err, &gqlErr) && strings.Contains(err.Error(), "Could not resolve") {
-			return model.Issue{}, fmt.Errorf("issue #%d not found in %s", number, g.repo)
+		if nf := g.notFoundError(err, number); nf != nil {
+			return model.Issue{}, nf
 		}
 		return model.Issue{}, wrapErr(err)
 	}
@@ -237,6 +235,36 @@ func (g *GitHub) GetIssue(ctx context.Context, number int) (model.Issue, error) 
 		return model.Issue{}, fmt.Errorf("issue #%d not found in %s", number, g.repo)
 	}
 	return resp.Repository.Issue.toModel(), nil
+}
+
+// notFoundError classifies a GraphQL NOT_FOUND error by the field it points
+// at, so a bad --repo reports the repository as the problem rather than
+// blaming a missing issue. It returns nil when err isn't a NOT_FOUND we
+// recognise, leaving the caller to fall back to wrapErr. Classification is
+// on the structured Type/Path fields, not the server's prose, so a
+// GitHub-side rewording can't silently break it.
+func (g *GitHub) notFoundError(err error, number int) error {
+	var gqlErr *api.GraphQLError
+	if !errors.As(err, &gqlErr) {
+		return nil
+	}
+	for _, e := range gqlErr.Errors {
+		if e.Type != "NOT_FOUND" {
+			continue
+		}
+		// The repository node fails to resolve at path ["repository"];
+		// a missing issue fails deeper, at ["repository", "issue"].
+		if len(e.Path) == 1 && pathSegment(e.Path[0]) == "repository" {
+			return fmt.Errorf("repository %s not found or not accessible", g.repo)
+		}
+		return fmt.Errorf("issue #%d not found in %s", number, g.repo)
+	}
+	return nil
+}
+
+func pathSegment(v any) string {
+	s, _ := v.(string)
+	return s
 }
 
 func (g *GitHub) CreateIssue(ctx context.Context, title, body string, labels []string) (model.Issue, error) {
