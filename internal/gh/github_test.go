@@ -312,6 +312,32 @@ func TestMutationResolvesNodeIDAndReportsMissing(t *testing.T) {
 	}
 }
 
+func TestNodeIDResolutionIsMemoized(t *testing.T) {
+	f := newFakeServer(t)
+	f.graphql["issue(number:"] = `{"data":{"repository":{"issue":{"id":"NODE"}}}}`
+	f.graphql["addBlockedBy"] = `{"data":{"addBlockedBy":{"clientMutationId":null}}}`
+	f.graphql["removeBlockedBy"] = `{"data":{"removeBlockedBy":{"clientMutationId":null}}}`
+	c := f.client(t)
+	ctx := context.Background()
+	// Two mutations over the same pair need four node IDs but only two
+	// distinct issues; each issue must be resolved once, not per edge.
+	if err := c.AddBlockedBy(ctx, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.RemoveBlockedBy(ctx, 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	resolutions := 0
+	for _, r := range f.requests {
+		if strings.Contains(r.Body, "issue(number:") {
+			resolutions++
+		}
+	}
+	if resolutions != 2 {
+		t.Errorf("node-ID resolutions = %d, want 2 (one per distinct issue)", resolutions)
+	}
+}
+
 func TestLabelsListAndCreate(t *testing.T) {
 	f := newFakeServer(t)
 	f.rest["GET /repos/o/r/labels?per_page=100&page=1"] = restResponse{200, `[{"name":"bug","color":"d73a4a","description":"x"}]`}

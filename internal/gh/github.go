@@ -30,6 +30,10 @@ type GitHub struct {
 	repo Repo
 	gql  *api.GraphQLClient
 	rest *api.RESTClient
+	// nodeIDs memoizes issue number → GraphQL node ID for this repo. Node
+	// IDs are immutable, so entries never invalidate. Not synchronized: a
+	// client serves one CLI command on one goroutine.
+	nodeIDs map[int]string
 }
 
 // New builds a client using gh's stored credentials and host config.
@@ -47,7 +51,7 @@ func NewWithOptions(repo Repo, opts api.ClientOptions) (*GitHub, error) {
 	if err != nil {
 		return nil, &AuthError{Err: err}
 	}
-	return &GitHub{repo: repo, gql: gql, rest: rest}, nil
+	return &GitHub{repo: repo, gql: gql, rest: rest, nodeIDs: map[int]string{}}, nil
 }
 
 func (g *GitHub) Viewer(ctx context.Context) (string, error) {
@@ -317,8 +321,14 @@ func (g *GitHub) Comment(ctx context.Context, number int, body string) error {
 
 // nodeID resolves an issue number to its GraphQL node ID, which the mutation
 // APIs need. It lets callers work purely in issue numbers. A missing issue or
-// repository is classified the same way GetIssue does.
+// repository is classified the same way GetIssue does. Resolutions are
+// memoized, so a command that mutates several edges sharing an endpoint
+// (e.g. migrate wiring one parent to many children) pays one lookup per
+// distinct issue, not per edge.
 func (g *GitHub) nodeID(ctx context.Context, number int) (string, error) {
+	if id, ok := g.nodeIDs[number]; ok {
+		return id, nil
+	}
 	query := `
 	query($owner: String!, $name: String!, $number: Int!) {
 		repository(owner: $owner, name: $name) { issue(number: $number) { id } }
@@ -340,6 +350,7 @@ func (g *GitHub) nodeID(ctx context.Context, number int) (string, error) {
 	if resp.Repository.Issue == nil {
 		return "", fmt.Errorf("issue #%d not found in %s", number, g.repo)
 	}
+	g.nodeIDs[number] = resp.Repository.Issue.ID
 	return resp.Repository.Issue.ID, nil
 }
 
