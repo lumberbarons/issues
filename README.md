@@ -29,6 +29,7 @@ repository is detected from the git remote (`--repo owner/name` overrides).
 
 ```sh
 issues init          # bootstrap the label set in a repo; prints a CLAUDE.md snippet
+issues hooks install # Claude Code SessionStart hook: `issues prime` at session start
 issues prime         # session-start context: conventions + ready work + live state
 issues ready         # what should I work on? (priority-sorted, zero open blockers)
 issues start 42      # claim it: assign @me + in-progress (refuses claimed work, exit 3)
@@ -55,6 +56,7 @@ issues unblock <n> --from <m>
 issues epic create --title "..." [--children N,N]
 issues epic status [<n>]
 issues init
+issues hooks install|remove      # Claude Code SessionStart hook running `issues prime`
 ```
 
 Every command takes `--json` (stable flat schema) and `--repo owner/name`. Exit
