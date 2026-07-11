@@ -34,6 +34,36 @@ type lineOpts struct {
 	assignees bool // append @login (in-progress views)
 	state     bool // append [closed] (mixed-state views)
 	progress  bool // append sub-issue rollup n/m (epic views)
+	annotate  bool // append [blocked by #n; epic n/m; ...] (list views)
+}
+
+// annotations explains, inline, why an issue isn't plain ready work.
+func annotations(i model.Issue) string {
+	var parts []string
+	if i.IsEpic() {
+		parts = append(parts, fmt.Sprintf("epic %d/%d", i.SubIssuesCompleted, i.SubIssuesTotal))
+	}
+	if blockers := i.OpenBlockers(); len(blockers) > 0 {
+		refs := make([]string, len(blockers))
+		for idx, n := range blockers {
+			refs[idx] = fmt.Sprintf("#%d", n)
+		}
+		parts = append(parts, "blocked by "+strings.Join(refs, " "))
+	}
+	if i.InProgress() || len(i.Assignees) > 0 {
+		claim := "in progress"
+		if len(i.Assignees) > 0 {
+			claim += " @" + strings.Join(i.Assignees, " @")
+		}
+		parts = append(parts, claim)
+	}
+	if !i.IsOpen() {
+		parts = append(parts, "closed")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "  [" + strings.Join(parts, "; ") + "]"
 }
 
 func lines(w io.Writer, issues []model.Issue, opts lineOpts) {
@@ -59,13 +89,17 @@ func lines(w io.Writer, issues []model.Issue, opts lineOpts) {
 		if opts.state && !i.IsOpen() {
 			fmt.Fprint(w, "  [closed]")
 		}
+		if opts.annotate {
+			fmt.Fprint(w, annotations(i))
+		}
 		fmt.Fprintln(w)
 	}
 }
 
-// List renders one aligned line per issue.
+// List renders one aligned line per issue, annotated with whatever keeps
+// it from being plain ready work.
 func List(w io.Writer, issues []model.Issue) {
-	lines(w, issues, lineOpts{state: true})
+	lines(w, issues, lineOpts{annotate: true})
 }
 
 // ListWithAssignees renders lines with @assignee suffixes (in-progress view).

@@ -59,9 +59,12 @@ issues init
 issues hooks install|remove      # Claude Code SessionStart hook running `issues prime`
 ```
 
-Every command takes `--json` (stable flat schema) and `--repo owner/name`. Exit
-codes are meaningful: `3` means "already claimed, pick the next ready item", `4`
-means "run `gh auth login`".
+Output is one compact line per issue, annotated with whatever keeps it from
+being plain ready work (`[blocked by #120]`, `[epic 2/6]`, `[in progress @you]`);
+`list` sorts ready work first, then claimed, blocked, and epics. Every command
+takes `--json` (stable flat schema; list commands emit NDJSON so output survives
+truncation and grep) and `--repo owner/name`. Exit codes are meaningful: `3`
+means "already claimed, pick the next ready item", `4` means "run `gh auth login`".
 
 ## Design
 

@@ -77,13 +77,17 @@ func ToJSON(i model.Issue, withDetail bool) IssueJSON {
 	return out
 }
 
-// JSONList writes issues as a JSON array.
+// JSONList writes issues as NDJSON — one compact object per line. Unlike
+// an array, it stays parseable under head/grep and agent output
+// truncation, which is how list output actually gets consumed.
 func JSONList(w io.Writer, issues []model.Issue) error {
-	out := make([]IssueJSON, len(issues))
-	for idx, i := range issues {
-		out[idx] = ToJSON(i, false)
+	enc := json.NewEncoder(w)
+	for _, i := range issues {
+		if err := enc.Encode(ToJSON(i, false)); err != nil {
+			return err
+		}
 	}
-	return writeJSON(w, out)
+	return nil
 }
 
 // JSONIssue writes one issue with full detail.

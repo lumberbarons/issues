@@ -173,9 +173,16 @@ typical repo.
 ## Output principles
 
 - Default output is compact fixed-column text, one line per issue, no ANSI when not
-  a TTY, no URLs (agents know `#n` + repo), stable sort order.
+  a TTY, no URLs (agents know `#n` + repo), stable sort order. Non-ready state is
+  annotated inline (`[blocked by #120]`, `[epic 2/6]`, `[in progress @user]`), and
+  `list` sorts ready work first, then claimed, blocked, epics — one call answers
+  both "what's actionable" and "what's stuck on what" (solar-controller dogfood
+  feedback, 2026-07-11).
 - `--json` everywhere, with a flat schema (deps as number arrays, not
-  `{nodes:[...]}` wrappers — hide GraphQL shapes from consumers).
+  `{nodes:[...]}` wrappers — hide GraphQL shapes from consumers). List-shaped
+  output is NDJSON, one compact object per line: a truncated JSON array is
+  unparseable garbage, a truncated NDJSON stream is just shorter (same feedback).
+  The primer states both formats so agents reach for the cheap one.
 - Errors are one line, actionable, exit codes meaningful (`ready` with no results
   exits 0 with `no ready work`; `start` on a claimed issue exits 3 with
   `already claimed`; auth failure exits 4; etc.).

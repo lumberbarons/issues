@@ -193,6 +193,28 @@ func TestByNumber(t *testing.T) {
 	}
 }
 
+func TestSortForList(t *testing.T) {
+	epic := open(1, "P0")
+	epic.SubIssuesTotal = 2
+	claimed := open(2, "P3", "bug", "in-progress")
+	blocked := open(3, "P0", "bug")
+	blocked.BlockedBy = []Ref{{Number: 9, State: "OPEN"}}
+	closed := Issue{Number: 4, State: "CLOSED", Labels: []string{"P0", "bug"}}
+	ready := open(5, "P4", "bug")
+	readyUrgent := open(6, "P1", "bug")
+	issues := []Issue{epic, claimed, blocked, closed, ready, readyUrgent}
+	SortForList(issues)
+	var nums []int
+	for _, i := range issues {
+		nums = append(nums, i.Number)
+	}
+	// ready (P1 then P4), claimed, blocked, epic, closed
+	want := []int{6, 5, 2, 3, 1, 4}
+	if !reflect.DeepEqual(nums, want) {
+		t.Errorf("SortForList order = %v, want %v", nums, want)
+	}
+}
+
 func TestSortByPriorityStable(t *testing.T) {
 	issues := []Issue{open(30), open(20, "P4", "bug"), open(10, "P0", "bug")}
 	SortByPriority(issues)

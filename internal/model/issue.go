@@ -200,6 +200,42 @@ func SortByPriority(issues []Issue) {
 	})
 }
 
+// listBucket groups issues for list output: actionable work first, then
+// claimed, then blocked, then epics, then closed. The bucket answers "why
+// isn't this ready?" by position alone.
+func listBucket(i Issue) int {
+	switch {
+	case !i.IsOpen():
+		return 4
+	case i.IsEpic():
+		return 3
+	case i.InProgress() || len(i.Assignees) > 0:
+		return 1
+	case len(i.OpenBlockers()) > 0:
+		return 2
+	default:
+		return 0
+	}
+}
+
+// SortForList orders issues ready-first (each bucket P0→P4 then P?, oldest
+// first), so one `issues list` answers both "what's actionable" and "what
+// exists but is stuck".
+func SortForList(issues []Issue) {
+	sort.SliceStable(issues, func(a, b int) bool {
+		ba, bb := listBucket(issues[a]), listBucket(issues[b])
+		if ba != bb {
+			return ba < bb
+		}
+		pa, _ := issues[a].Priority()
+		pb, _ := issues[b].Priority()
+		if pa != pb {
+			return pa < pb
+		}
+		return issues[a].Number < issues[b].Number
+	})
+}
+
 // Ready returns open, non-epic, unclaimed issues with zero open blockers,
 // sorted by priority. Untriaged issues are included (invisible work is the
 // failure mode) and sort after explicitly-prioritized work via P?.

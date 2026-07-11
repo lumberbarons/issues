@@ -75,7 +75,7 @@ func (a *App) List(ctx context.Context, opts ListOpts) error {
 		}
 		out = append(out, i)
 	}
-	model.SortByPriority(out)
+	model.SortForList(out)
 	if a.JSON {
 		return render.JSONList(a.Out, out)
 	}

@@ -61,8 +61,24 @@ func fixtureIssues() []model.Issue {
 }
 
 func TestList(t *testing.T) {
+	issues := fixtureIssues()
+	blocked := model.Issue{
+		Number: 121, Title: "Voltgo client for tests", State: "OPEN", CreatedAt: ts(9),
+		Labels:    []string{"P2", "enhancement"},
+		BlockedBy: []model.Ref{{Number: 120, State: "OPEN"}, {Number: 8, State: "CLOSED"}},
+	}
+	epic := model.Issue{
+		Number: 137, Title: "Epic: Voltgo", State: "OPEN", CreatedAt: ts(5),
+		Labels:         []string{"P2"},
+		SubIssuesTotal: 6, SubIssuesCompleted: 2,
+		SubIssues: []model.Ref{{Number: 120, State: "OPEN"}},
+	}
+	claimed := model.Issue{
+		Number: 124, Title: "Claimed one", State: "OPEN", CreatedAt: ts(8),
+		Labels: []string{"P2", "bug", "in-progress"}, Assignees: []string{"lumberbarons"},
+	}
 	var buf bytes.Buffer
-	List(&buf, fixtureIssues())
+	List(&buf, append(issues, blocked, epic, claimed))
 	checkGolden(t, "list", buf.Bytes())
 }
 
