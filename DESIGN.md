@@ -220,9 +220,10 @@ typical repo.
 
 ## Open questions
 
-- **Name.** Working name `issues` (binary and repo). Generic but reads perfectly in
-  agent transcripts (`issues ready`, `issues prime`). Alternatives if it collides:
-  `iz`, `ghi`, `beans`.
+- **Name — resolved.** Binary and repo are `issues`. `is` was considered — no shell
+  builtin, POSIX utility, or popular tool conflicts with it — but rejected as
+  ungreppable and ambiguous in prose and transcripts (`is block 42 --on 7`). Anyone
+  who wants the terse form can `alias is=issues` locally; agents use the real name.
 - **`remember`.** beads couples memory to the tracker; Claude Code has its own
   memory system. Skip, or implement as comments on a pinned "agent notes" issue?
   Deferred to M4 — need real usage first.
