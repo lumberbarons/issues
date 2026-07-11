@@ -25,12 +25,24 @@ Releases are tag-driven (`vX.Y.Z` → goreleaser). Commit messages use `feat:`/`
 
 The layering exists so everything with behavior is testable without hitting GitHub:
 
-- `cmd/issues/` — main + urfave/cli v3 flag wiring only. No behavior; excluded from coverage.
-- `internal/cli/` — the commands, written against the `gh.Client` interface. Tested with `fakeClient` (`fake_test.go`), a stateful in-memory client where mutations really mutate, so guarded flows (claim, re-read after claim) behave like the real API.
-- `internal/gh/` — thin API layer: the `Client` interface and its go-gh-backed implementation. Auth reuses the `gh` CLI's stored credentials (no auth flow of our own); repo detection comes from the git remote.
-- `internal/model/` — pure domain logic: readiness, label normalization, cycle detection. No I/O, plain unit tests.
-- `internal/render/` — text and JSON renderers, golden-file tested (`testdata/*.golden`).
-- `internal/conventions/` — the opinions: label set, body template, primer text.
+| Directory | What | When to read |
+|---|---|---|
+| `cmd/issues/` | main + urfave/cli v3 flag wiring only — no behavior, excluded from coverage | Adding a command or flag |
+| `internal/cli/` | The commands, written against the `gh.Client` interface; tested with `fakeClient` (`fake_test.go`), a stateful in-memory client where mutations really mutate, so guarded flows (claim, re-read after claim) behave like the real API | Changing command behavior or guarded flows |
+| `internal/gh/` | Thin API layer: the `Client` interface and its go-gh-backed implementation; auth reuses the `gh` CLI's stored credentials (no auth flow of our own), repo detection comes from the git remote | Changing queries, auth, or API calls |
+| `internal/model/` | Pure domain logic: readiness, label normalization, cycle detection — no I/O, plain unit tests | Changing readiness or label semantics |
+| `internal/render/` | Text and JSON renderers, golden-file tested (`testdata/*.golden`) | Changing output format |
+| `internal/conventions/` | The opinions: label set, body template, primer text | Changing labels, the template, or the primer |
+| `internal/beads/` | Parses a beads (bd) `issues.jsonl` snapshot for `migrate` — pure parsing, no runtime dependency on bd | Changing the beads migration |
+| `docs/` | Supporting docs (primer mock) | Revising primer output |
+
+| File | What | When to read |
+|---|---|---|
+| `DESIGN.md` | The authoritative design document: conventions, normalization rules, API strategy, spike results | Before changing any behavior |
+| `README.md` | User-facing overview and install instructions | Changing the CLI surface or install flow |
+| `install.sh` | Curl-able installer, shellcheck-linted in CI | Changing the install flow |
+| `go.mod` | Module definition and dependencies | Adding or upgrading a dependency |
+| `LICENSE` | MIT license | Never |
 
 API strategy: one GraphQL query per command where possible. `ready`/`prime` fetch all open issues (labels, assignees, parent, sub-issues, blockers) in a single paginated query and filter client-side. Nested connections are capped, not paginated — warn when `totalCount` exceeds the cap rather than truncating silently.
 
