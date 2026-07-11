@@ -195,7 +195,28 @@ typical repo.
 - **Testing**: unit tests against a fake API layer; golden files for renderer output;
   one integration smoke test behind a build tag that hits a real scratch repo.
 
-## Milestones
+## Build & distribution
+
+- **CI** (GitHub Actions, actions pinned by SHA at their latest versions): one
+  workflow triggered on PRs and pushes to `main`, running `golangci-lint` and the
+  full test suite (`go test -race -coverprofile ./...`). Go version comes from
+  `go.mod`.
+- **Coverage gate**: 90% minimum, blocking. Go's toolchain measures *statement*
+  coverage only (line-equivalent in practice; there is no native branch coverage —
+  see gobco note in open questions), enforced with `go-test-coverage` in CI.
+  `cmd/` wiring is excluded so the bar bites on the logic packages
+  (`internal/model`, `internal/render`, `internal/conventions`, `internal/gh`).
+- **Releases are tag-driven**: pushing a `vX.Y.Z` tag runs goreleaser, which builds
+  static binaries for linux and macOS (amd64 + arm64, CGO off), stamps the version
+  into `issues --version` via ldflags, and publishes the archives plus a checksums
+  file as a GitHub Release.
+- **install.sh** at the repo root, usable as
+  `curl -fsSL https://raw.githubusercontent.com/lumberbarons/issues/main/install.sh | bash`:
+  detects OS/arch via `uname`, resolves the latest release through the GitHub API,
+  downloads the matching archive, verifies it against the checksums file, and
+  installs to `$HOME/.local/bin` (`INSTALL_DIR` overrides; never sudo), printing a
+  PATH hint when needed. `go install .../cmd/issues@latest` remains the
+  toolchain-native alternative.
 
 - **M0 — scaffold**: module, urfave/cli v3 skeleton, go-gh auth + repo detection,
   `issues list` (proves the GraphQL query and renderer end-to-end). The query must
@@ -204,9 +225,10 @@ typical repo.
   cycles natively (if it does, our cycle check is just a friendlier error), and that
   nested `subIssues`/`blockedBy` connections behave under capped `first: N` slices —
   nested pagination is awkward, so cap and warn on truncation rather than silently
-  dropping.
+  dropping. CI (lint + full tests) arrives with the scaffold.
 - **M1 — read**: `ready`, `show`, `epic status`, `prime` v1. *This is the payoff
-  milestone — adopt in solar-controller immediately.*
+  milestone — adopt in solar-controller immediately.* The first tagged release
+  (goreleaser + install.sh) ships here, since adoption needs an installable binary.
 - **M2 — write**: `create` (template + label enforcement), `set` (retriage —
   priority changes are the most common tracker operation, and doing them through
   the tool is what keeps the one-label invariants true), `triage`, `block`/`unblock`
@@ -231,6 +253,9 @@ typical repo.
   churn). v1: both — assign is the claim, label is the visibility.
 - **Multi-repo prime.** Someday `issues prime --all-repos` for a workspace overview?
   Out of scope for v1.
+- **Branch coverage.** The Go toolchain only does statement coverage; `gobco` adds
+  branch/condition coverage via source instrumentation but is niche and awkward in
+  CI. Revisit if statement coverage starts hiding untested branches in practice.
 - **Same-user claim races.** Every agent authenticates as `@me`, so two parallel
   sessions that race `start` inside the guard window are indistinguishable by
   assignee or label — both think they won. If this happens in practice, tie-break
