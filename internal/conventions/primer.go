@@ -7,8 +7,10 @@ Close via PR; issues close is for wontfix/duplicate only. Never work an epic dir
 File discovered work: issues create ... --discovered-from <n>.
 
 Conventions (enforced by the tool's write path):
-- One priority label P0(critical)..P4(backlog), default P2; one type label bug|enhancement|task; area labels free-form.
+- One priority label P0(critical)..P4(backlog), default P2; one type label bug|enhancement|task.
+- Area labels sparingly — only once several issues would share one. No title prefixes; labels carry the metadata.
 - Dependencies are native (--blocked-by), never body text. Epics are sub-issue trees.
+- Bodies: ### Where / ### Problem or ### Goal / ### Fix or ### Approach / ### Done when (checklist). Omit empty sections.
 - Missing priority renders P? and sorts last; issues missing priority/type are untriaged, not broken — triage them via issues set.
 - start refuses claimed issues (exit 3): pick the next ready item. Untriaged issues need start --priority.
 
