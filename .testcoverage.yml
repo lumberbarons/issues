@@ -1,0 +1,10 @@
+# Coverage gate: statement coverage on the logic packages; cmd/ is wiring
+# and excluded so the bar bites where behavior lives.
+profile: coverage.out
+
+threshold:
+  total: 90
+
+exclude:
+  paths:
+    - ^cmd/

@@ -1,0 +1,35 @@
+version: 2
+
+project_name: issues
+
+builds:
+  - main: ./cmd/issues
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat'
+      order: 0
+    - title: Fixes
+      regexp: '^fix'
+      order: 1
+    - title: Docs
+      regexp: '^docs'
+      order: 2
+    - title: Other
+      order: 999
