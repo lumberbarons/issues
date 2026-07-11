@@ -1,0 +1,438 @@
+// Command issues is an agentic-first CLI for GitHub Issues. All behavior
+// lives in internal/; this file is flag wiring and exit-code mapping.
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+
+	ucli "github.com/urfave/cli/v3"
+
+	appcli "github.com/lumberbarons/issues/internal/cli"
+	"github.com/lumberbarons/issues/internal/gh"
+
+	"github.com/cli/go-gh/v2/pkg/repository"
+)
+
+// version is stamped by goreleaser via ldflags.
+var version = "dev"
+
+func main() {
+	if err := root().Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		code := appcli.ExitGeneric
+		var exitErr *appcli.ExitError
+		var authErr *gh.AuthError
+		switch {
+		case errors.As(err, &exitErr):
+			code = exitErr.Code
+		case errors.As(err, &authErr):
+			code = appcli.ExitAuth
+		}
+		os.Exit(code)
+	}
+}
+
+// globalFlags are attached to every leaf command so they work in either
+// position (`issues --json ready` and `issues ready --json`).
+func globalFlags() []ucli.Flag {
+	return []ucli.Flag{
+		&ucli.BoolFlag{Name: "json", Usage: "structured output with a stable schema"},
+		&ucli.StringFlag{Name: "repo", Usage: "target `owner/name` (default: detect from git remote)"},
+	}
+}
+
+func buildApp(cmd *ucli.Command) (*appcli.App, error) {
+	repo := gh.Repo{}
+	if spec := cmd.String("repo"); spec != "" {
+		owner, name, ok := strings.Cut(spec, "/")
+		if !ok || owner == "" || name == "" {
+			return nil, &appcli.ExitError{Code: appcli.ExitUsage, Message: "--repo must be owner/name"}
+		}
+		repo.Owner, repo.Name = owner, name
+	} else {
+		current, err := repository.Current()
+		if err != nil {
+			return nil, fmt.Errorf("cannot detect repository (use --repo owner/name): %w", err)
+		}
+		repo.Owner, repo.Name = current.Owner, current.Name
+	}
+	client, err := gh.New(repo)
+	if err != nil {
+		return nil, err
+	}
+	return &appcli.App{
+		Client: client,
+		Repo:   repo,
+		Out:    os.Stdout,
+		ErrOut: os.Stderr,
+		JSON:   cmd.Bool("json"),
+		Edit:   editWithEditor,
+	}, nil
+}
+
+// numberArg parses the required positional issue number.
+func numberArg(cmd *ucli.Command, usage string) (int, error) {
+	arg := cmd.Args().First()
+	if arg == "" {
+		return 0, &appcli.ExitError{Code: appcli.ExitUsage, Message: "usage: " + usage}
+	}
+	n, err := strconv.Atoi(strings.TrimPrefix(arg, "#"))
+	if err != nil || n <= 0 {
+		return 0, &appcli.ExitError{Code: appcli.ExitUsage, Message: fmt.Sprintf("invalid issue number %q", arg)}
+	}
+	return n, nil
+}
+
+func editWithEditor(initial string) (string, error) {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		return "", errors.New("$EDITOR is not set")
+	}
+	tmp, err := os.CreateTemp("", "issues-*.md")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if _, err := tmp.WriteString(initial); err != nil {
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	run := exec.Command("sh", "-c", editor+" "+tmp.Name())
+	run.Stdin, run.Stdout, run.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := run.Run(); err != nil {
+		return "", err
+	}
+	edited, err := os.ReadFile(tmp.Name())
+	return string(edited), err
+}
+
+func root() *ucli.Command {
+	return &ucli.Command{
+		Name:    "issues",
+		Usage:   "agentic-first CLI for GitHub Issues",
+		Version: version,
+		Flags:   globalFlags(),
+		Commands: []*ucli.Command{
+			primeCmd(), readyCmd(), listCmd(), showCmd(), createCmd(),
+			startCmd(), triageCmd(), setCmd(), closeCmd(), blockCmd(),
+			unblockCmd(), epicCmd(), initCmd(),
+		},
+	}
+}
+
+func primeCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:  "prime",
+		Usage: "session-start context: conventions, ready work, live state",
+		Flags: globalFlags(),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Prime(ctx)
+		},
+	}
+}
+
+func readyCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:  "ready",
+		Usage: "open, non-epic issues with zero open blockers, priority-sorted",
+		Flags: globalFlags(),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Ready(ctx)
+		},
+	}
+}
+
+func listCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:  "list",
+		Usage: "list issues (open by default)",
+		Flags: append(globalFlags(),
+			&ucli.StringFlag{Name: "label", Usage: "only issues with this label"},
+			&ucli.IntFlag{Name: "epic", Usage: "only children of epic `N`"},
+			&ucli.BoolFlag{Name: "closed", Usage: "show closed issues instead"},
+		),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.List(ctx, appcli.ListOpts{
+				Label:  cmd.String("label"),
+				Epic:   cmd.Int("epic"),
+				Closed: cmd.Bool("closed"),
+			})
+		},
+	}
+}
+
+func showCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:      "show",
+		Usage:     "issue detail: body, deps, parent, children, recent comments",
+		ArgsUsage: "<n>",
+		Flags:     globalFlags(),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			n, err := numberArg(cmd, "issues show <n>")
+			if err != nil {
+				return err
+			}
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Show(ctx, n)
+		},
+	}
+}
+
+func createCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:  "create",
+		Usage: "file a new issue within the conventions",
+		Flags: append(globalFlags(),
+			&ucli.StringFlag{Name: "title", Usage: "issue title (required)"},
+			&ucli.StringFlag{Name: "type", Usage: "bug|enhancement|task (required)"},
+			&ucli.StringFlag{Name: "priority", Usage: "P0..P4 (default P2)"},
+			&ucli.StringSliceFlag{Name: "area", Usage: "area label (repeatable)"},
+			&ucli.IntSliceFlag{Name: "blocked-by", Usage: "blocking issue `N` (repeatable)"},
+			&ucli.IntFlag{Name: "parent", Usage: "attach as sub-issue of epic `N`"},
+			&ucli.IntFlag{Name: "discovered-from", Usage: "link back to issue `N` this was discovered under"},
+			&ucli.StringFlag{Name: "body-file", Usage: "read body from `FILE`"},
+			&ucli.BoolFlag{Name: "edit", Usage: "open $EDITOR seeded with the body template"},
+		),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Create(ctx, appcli.CreateOpts{
+				Title:          cmd.String("title"),
+				Type:           cmd.String("type"),
+				Priority:       cmd.String("priority"),
+				Areas:          cmd.StringSlice("area"),
+				BlockedBy:      cmd.IntSlice("blocked-by"),
+				Parent:         cmd.Int("parent"),
+				DiscoveredFrom: cmd.Int("discovered-from"),
+				BodyFile:       cmd.String("body-file"),
+				Edit:           cmd.Bool("edit"),
+			})
+		},
+	}
+}
+
+func startCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:      "start",
+		Usage:     "claim an issue: assign @me + in-progress (refuses claimed issues, exit 3)",
+		ArgsUsage: "<n>",
+		Flags: append(globalFlags(),
+			&ucli.StringFlag{Name: "priority", Usage: "P0..P4; required when the issue is untriaged"},
+			&ucli.BoolFlag{Name: "force", Usage: "steal an already-claimed issue"},
+		),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			n, err := numberArg(cmd, "issues start <n>")
+			if err != nil {
+				return err
+			}
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Start(ctx, n, cmd.String("priority"), cmd.Bool("force"))
+		},
+	}
+}
+
+func triageCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:  "triage",
+		Usage: "issues missing priority/type labels, oldest first",
+		Flags: globalFlags(),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Triage(ctx)
+		},
+	}
+}
+
+func setCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:      "set",
+		Usage:     "retriage/edit within conventions (swaps labels, never stacks)",
+		ArgsUsage: "<n>",
+		Flags: append(globalFlags(),
+			&ucli.StringFlag{Name: "priority", Usage: "P0..P4"},
+			&ucli.StringFlag{Name: "type", Usage: "bug|enhancement|task"},
+			&ucli.StringSliceFlag{Name: "add-area", Usage: "add area label (repeatable)"},
+			&ucli.StringSliceFlag{Name: "remove-area", Usage: "remove area label (repeatable)"},
+			&ucli.IntFlag{Name: "parent", Usage: "move under epic `N`"},
+			&ucli.BoolFlag{Name: "no-parent", Usage: "detach from its epic"},
+			&ucli.StringFlag{Name: "title", Usage: "new title"},
+		),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			n, err := numberArg(cmd, "issues set <n>")
+			if err != nil {
+				return err
+			}
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Set(ctx, n, appcli.SetOpts{
+				Priority:    cmd.String("priority"),
+				Type:        cmd.String("type"),
+				AddAreas:    cmd.StringSlice("add-area"),
+				RemoveAreas: cmd.StringSlice("remove-area"),
+				Parent:      cmd.Int("parent"),
+				NoParent:    cmd.Bool("no-parent"),
+				Title:       cmd.String("title"),
+			})
+		},
+	}
+}
+
+func closeCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:      "close",
+		Usage:     "comment + close (not-planned unless --completed or --duplicate-of)",
+		ArgsUsage: "<n>",
+		Flags: append(globalFlags(),
+			&ucli.StringFlag{Name: "reason", Usage: "closing comment (required unless --duplicate-of)"},
+			&ucli.BoolFlag{Name: "completed", Usage: "close as completed"},
+			&ucli.IntFlag{Name: "duplicate-of", Usage: "close as duplicate of issue `N`"},
+		),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			n, err := numberArg(cmd, "issues close <n> --reason \"...\"")
+			if err != nil {
+				return err
+			}
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Close(ctx, n, cmd.String("reason"), cmd.Bool("completed"), cmd.Int("duplicate-of"))
+		},
+	}
+}
+
+func blockCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:      "block",
+		Usage:     "add a native dependency (cycle-checked)",
+		ArgsUsage: "<n> --on <m>",
+		Flags: append(globalFlags(),
+			&ucli.IntFlag{Name: "on", Usage: "blocking issue `N` (required)", Required: true},
+		),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			n, err := numberArg(cmd, "issues block <n> --on <m>")
+			if err != nil {
+				return err
+			}
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Block(ctx, n, cmd.Int("on"))
+		},
+	}
+}
+
+func unblockCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:      "unblock",
+		Usage:     "remove a dependency",
+		ArgsUsage: "<n> --from <m>",
+		Flags: append(globalFlags(),
+			&ucli.IntFlag{Name: "from", Usage: "blocking issue `N` (required)", Required: true},
+		),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			n, err := numberArg(cmd, "issues unblock <n> --from <m>")
+			if err != nil {
+				return err
+			}
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Unblock(ctx, n, cmd.Int("from"))
+		},
+	}
+}
+
+func epicCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:  "epic",
+		Usage: "manage epics (sub-issue trees)",
+		Commands: []*ucli.Command{
+			{
+				Name:  "create",
+				Usage: "create a parent issue and attach children",
+				Flags: append(globalFlags(),
+					&ucli.StringFlag{Name: "title", Usage: "epic title (required)"},
+					&ucli.IntSliceFlag{Name: "children", Usage: "existing issues to attach"},
+				),
+				Action: func(ctx context.Context, cmd *ucli.Command) error {
+					app, err := buildApp(cmd)
+					if err != nil {
+						return err
+					}
+					return app.EpicCreate(ctx, cmd.String("title"), cmd.IntSlice("children"))
+				},
+			},
+			{
+				Name:      "status",
+				Usage:     "progress rollup for all epics, or one epic's children",
+				ArgsUsage: "[<n>]",
+				Flags:     globalFlags(),
+				Action: func(ctx context.Context, cmd *ucli.Command) error {
+					n := 0
+					if cmd.Args().First() != "" {
+						var err error
+						if n, err = numberArg(cmd, "issues epic status [<n>]"); err != nil {
+							return err
+						}
+					}
+					app, err := buildApp(cmd)
+					if err != nil {
+						return err
+					}
+					return app.EpicStatus(ctx, n)
+				},
+			},
+		},
+	}
+}
+
+func initCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:  "init",
+		Usage: "bootstrap convention labels; print the CLAUDE.md snippet",
+		Flags: globalFlags(),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Init(ctx)
+		},
+	}
+}

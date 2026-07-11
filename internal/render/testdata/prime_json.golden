@@ -1,0 +1,31 @@
+{
+  "repo": "o/r",
+  "openTotal": 2,
+  "readyTotal": 1,
+  "ready": [
+    {
+      "number": 117,
+      "title": "Tautological assertions on state the code cannot modify",
+      "state": "open",
+      "priority": "P1",
+      "type": "bug",
+      "areas": [
+        "tests"
+      ],
+      "assignees": [],
+      "epic": false,
+      "inProgress": false,
+      "untriaged": false,
+      "parent": null,
+      "blockedBy": [],
+      "openBlockers": [],
+      "subIssues": [],
+      "subIssuesCompleted": 0,
+      "createdAt": "2026-07-02T12:00:00Z"
+    }
+  ],
+  "inProgress": [],
+  "epics": [],
+  "untriaged": 1,
+  "warnings": []
+}

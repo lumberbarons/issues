@@ -1,0 +1,26 @@
+{
+  "number": 42,
+  "title": "T",
+  "state": "open",
+  "priority": "P1",
+  "type": "bug",
+  "areas": [],
+  "assignees": [],
+  "epic": false,
+  "inProgress": false,
+  "untriaged": false,
+  "parent": null,
+  "blockedBy": [],
+  "openBlockers": [],
+  "subIssues": [],
+  "subIssuesCompleted": 0,
+  "createdAt": "2026-07-06T12:00:00Z",
+  "body": "body here",
+  "comments": [
+    {
+      "author": "alice",
+      "createdAt": "2026-07-07T12:00:00Z",
+      "body": "hi"
+    }
+  ]
+}

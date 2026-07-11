@@ -1,0 +1,186 @@
+// Package render turns domain types into the two output forms: compact
+// fixed-column text and flat JSON.
+package render
+
+import (
+	"fmt"
+	"io"
+	"strconv"
+	"strings"
+
+	"github.com/lumberbarons/issues/internal/model"
+)
+
+// meta is the "P2 enhancement (tests)" middle column of an issue line.
+func meta(i model.Issue) string {
+	p, _ := i.Priority()
+	parts := []string{p.String()}
+	if t, _ := i.Type(); t != "" {
+		parts = append(parts, t)
+	}
+	if areas := i.Areas(); len(areas) > 0 {
+		parts = append(parts, "("+strings.Join(areas, ",")+")")
+	}
+	return strings.Join(parts, " ")
+}
+
+// Line renders one issue as `#n meta  title`, unaligned.
+func Line(i model.Issue) string {
+	return fmt.Sprintf("#%d %s  %s", i.Number, meta(i), i.Title)
+}
+
+// lineOpts tweak List output per caller.
+type lineOpts struct {
+	assignees bool // append @login (in-progress views)
+	state     bool // append [closed] (mixed-state views)
+	progress  bool // append sub-issue rollup n/m (epic views)
+}
+
+func lines(w io.Writer, issues []model.Issue, opts lineOpts) {
+	numWidth, metaWidth := 0, 0
+	metas := make([]string, len(issues))
+	for idx, i := range issues {
+		metas[idx] = meta(i)
+		if n := len(strconv.Itoa(i.Number)); n > numWidth {
+			numWidth = n
+		}
+		if len(metas[idx]) > metaWidth {
+			metaWidth = len(metas[idx])
+		}
+	}
+	for idx, i := range issues {
+		fmt.Fprintf(w, "#%-*d %-*s  %s", numWidth, i.Number, metaWidth, metas[idx], i.Title)
+		if opts.progress && i.IsEpic() {
+			fmt.Fprintf(w, "  %d/%d", i.SubIssuesCompleted, i.SubIssuesTotal)
+		}
+		if opts.assignees && len(i.Assignees) > 0 {
+			fmt.Fprintf(w, "  @%s", strings.Join(i.Assignees, " @"))
+		}
+		if opts.state && !i.IsOpen() {
+			fmt.Fprint(w, "  [closed]")
+		}
+		fmt.Fprintln(w)
+	}
+}
+
+// List renders one aligned line per issue.
+func List(w io.Writer, issues []model.Issue) {
+	lines(w, issues, lineOpts{state: true})
+}
+
+// ListWithAssignees renders lines with @assignee suffixes (in-progress view).
+func ListWithAssignees(w io.Writer, issues []model.Issue) {
+	lines(w, issues, lineOpts{assignees: true})
+}
+
+// EpicList renders epics with their progress rollups.
+func EpicList(w io.Writer, issues []model.Issue) {
+	lines(w, issues, lineOpts{progress: true})
+}
+
+// Show renders the full detail view for one issue.
+func Show(w io.Writer, i model.Issue) {
+	fmt.Fprintln(w, Line(i))
+	state := strings.ToLower(i.State)
+	if i.StateReason != "" {
+		state += " (" + strings.ToLower(i.StateReason) + ")"
+	}
+	fmt.Fprintf(w, "state: %s  created: %s", state, i.CreatedAt.Format("2006-01-02"))
+	if len(i.Assignees) > 0 {
+		fmt.Fprintf(w, "  assignee: @%s", strings.Join(i.Assignees, " @"))
+	}
+	fmt.Fprintln(w)
+	if i.Parent != nil {
+		fmt.Fprintf(w, "parent: #%d %s\n", i.Parent.Number, i.ParentTitle)
+	}
+	if len(i.BlockedBy) > 0 {
+		fmt.Fprintf(w, "blocked by: %s\n", refList(i.BlockedBy))
+	}
+	if i.IsEpic() {
+		fmt.Fprintf(w, "sub-issues (%d/%d done): %s\n", i.SubIssuesCompleted, i.SubIssuesTotal, refList(i.SubIssues))
+	}
+	if body := strings.TrimSpace(i.Body); body != "" {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, body)
+	}
+	if len(i.Comments) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "comments:")
+		for _, c := range i.Comments {
+			fmt.Fprintf(w, "  @%s (%s): %s\n", c.Author, c.CreatedAt.Format("2006-01-02"), strings.TrimSpace(c.Body))
+		}
+	}
+}
+
+func refList(refs []model.Ref) string {
+	parts := make([]string, len(refs))
+	for idx, r := range refs {
+		parts[idx] = fmt.Sprintf("#%d", r.Number)
+		if r.State == "CLOSED" {
+			parts[idx] += " (closed)"
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+// EpicStatus renders one epic with its children, using the full issue set
+// to resolve child titles.
+func EpicStatus(w io.Writer, epic model.Issue, byNumber map[int]model.Issue) {
+	fmt.Fprintf(w, "%s  %d/%d\n", Line(epic), epic.SubIssuesCompleted, epic.SubIssuesTotal)
+	for _, ref := range epic.SubIssues {
+		mark := "○"
+		if ref.State == "CLOSED" {
+			mark = "✓"
+		}
+		if child, ok := byNumber[ref.Number]; ok {
+			fmt.Fprintf(w, "  %s #%d %s  %s\n", mark, child.Number, meta(child), child.Title)
+		} else {
+			fmt.Fprintf(w, "  %s #%d\n", mark, ref.Number)
+		}
+	}
+}
+
+// PrimeData is everything the primer needs, precomputed by the command.
+type PrimeData struct {
+	Repo       string
+	Ready      []model.Issue // already capped to top N
+	ReadyTotal int
+	OpenTotal  int
+	InProgress []model.Issue
+	Epics      []model.Issue
+	Warnings   []string
+	Untriaged  int
+}
+
+// Prime renders the session-start primer: static conventions, live state,
+// contradictions. Sections are omitted when empty.
+func Prime(w io.Writer, static string, d PrimeData) {
+	fmt.Fprintf(w, "# issues primer — %s\n", d.Repo)
+	fmt.Fprintln(w, static)
+	fmt.Fprintf(w, "\n## Ready (%d of %d open)\n", d.ReadyTotal, d.OpenTotal)
+	if len(d.Ready) == 0 {
+		fmt.Fprintln(w, "no ready work")
+	} else {
+		lines(w, d.Ready, lineOpts{})
+		if d.ReadyTotal > len(d.Ready) {
+			fmt.Fprintf(w, "… %d more: issues ready\n", d.ReadyTotal-len(d.Ready))
+		}
+	}
+	if len(d.InProgress) > 0 {
+		fmt.Fprintf(w, "\n## In progress (%d)\n", len(d.InProgress))
+		lines(w, d.InProgress, lineOpts{assignees: true})
+	}
+	if len(d.Epics) > 0 {
+		fmt.Fprintln(w, "\n## Epics")
+		lines(w, d.Epics, lineOpts{progress: true})
+	}
+	if d.Untriaged > 0 {
+		fmt.Fprintf(w, "\n%d untriaged → issues triage\n", d.Untriaged)
+	}
+	if len(d.Warnings) > 0 {
+		fmt.Fprintln(w, "\n## Warnings")
+		for _, warn := range d.Warnings {
+			fmt.Fprintf(w, "⚠ %s\n", warn)
+		}
+	}
+}

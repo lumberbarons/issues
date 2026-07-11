@@ -1,0 +1,265 @@
+// Package model holds the domain types and the pure read-path logic:
+// label normalization, ready-work detection, and dependency-cycle detection.
+package model
+
+import (
+	"slices"
+	"sort"
+	"time"
+)
+
+// Priority is the P0 (critical) to P4 (backlog) scale, plus Unknown for
+// issues with no priority label. Lower values are more urgent.
+type Priority int
+
+const (
+	P0 Priority = iota
+	P1
+	P2
+	P3
+	P4
+	// PriorityUnknown sorts after P4; rendered as "P?".
+	PriorityUnknown
+)
+
+// DefaultPriority is applied by the write path when none is given.
+const DefaultPriority = P2
+
+var priorityNames = [...]string{"P0", "P1", "P2", "P3", "P4"}
+
+func (p Priority) String() string {
+	if p >= P0 && p <= P4 {
+		return priorityNames[p]
+	}
+	return "P?"
+}
+
+// ParsePriority parses "P0".."P4" (exact match, as used in labels and flags).
+func ParsePriority(s string) (Priority, bool) {
+	for i, name := range priorityNames {
+		if s == name {
+			return Priority(i), true
+		}
+	}
+	return PriorityUnknown, false
+}
+
+// Types lists the type labels in normalization precedence order: when an
+// issue carries more than one, the first of these wins.
+var Types = []string{"bug", "enhancement", "task"}
+
+// IsType reports whether the label name is one of the type labels.
+func IsType(label string) bool {
+	return slices.Contains(Types, label)
+}
+
+// InProgressLabel marks claimed issues; the assignee is the claim, the label
+// is the visibility.
+const InProgressLabel = "in-progress"
+
+// Ref is a lightweight reference to another issue, as returned inside
+// nested connections (blockers, sub-issues).
+type Ref struct {
+	Number int
+	State  string // "OPEN" or "CLOSED"
+}
+
+// Comment is a recent issue comment (populated by show only).
+type Comment struct {
+	Author    string
+	CreatedAt time.Time
+	Body      string
+}
+
+// Issue is the normalized domain shape of a GitHub issue. Raw labels are
+// kept as-is; priority/type/areas are derived by the methods below.
+type Issue struct {
+	ID          string // GraphQL node ID, needed for mutations
+	Number      int
+	Title       string
+	Body        string
+	State       string // "OPEN" or "CLOSED"
+	StateReason string
+	CreatedAt   time.Time
+	Labels      []string
+	Assignees   []string
+	Parent      *Ref
+	ParentTitle string
+	SubIssues   []Ref
+	// SubIssuesTotal is the server-side total; may exceed len(SubIssues)
+	// when the nested connection was capped.
+	SubIssuesTotal     int
+	SubIssuesCompleted int
+	BlockedBy          []Ref
+	// BlockedByTotal is the server-side total; may exceed len(BlockedBy)
+	// when the nested connection was capped.
+	BlockedByTotal int
+	Comments       []Comment
+}
+
+// Priority returns the effective priority. When an issue carries multiple
+// priority labels the highest urgency wins and multi is true (a
+// contradiction the warnings pass reports).
+func (i Issue) Priority() (p Priority, multi bool) {
+	p = PriorityUnknown
+	n := 0
+	for _, l := range i.Labels {
+		if v, ok := ParsePriority(l); ok {
+			n++
+			if v < p {
+				p = v
+			}
+		}
+	}
+	return p, n > 1
+}
+
+// Type returns the effective type ("" when untyped). When an issue carries
+// multiple type labels the first of bug|enhancement|task wins and multi is
+// true.
+func (i Issue) Type() (typ string, multi bool) {
+	n := 0
+	for _, t := range Types {
+		for _, l := range i.Labels {
+			if l == t {
+				n++
+				if typ == "" {
+					typ = t
+				}
+			}
+		}
+	}
+	return typ, n > 1
+}
+
+// Areas returns all labels that are not priority, type, or in-progress.
+func (i Issue) Areas() []string {
+	var areas []string
+	for _, l := range i.Labels {
+		if _, ok := ParsePriority(l); ok {
+			continue
+		}
+		if IsType(l) || l == InProgressLabel {
+			continue
+		}
+		areas = append(areas, l)
+	}
+	return areas
+}
+
+// IsEpic reports whether the issue has sub-issues. The "Epic: " title
+// prefix is cosmetic; sub-issues are the truth.
+func (i Issue) IsEpic() bool {
+	return i.SubIssuesTotal > 0
+}
+
+// InProgress reports whether the issue carries the in-progress label.
+func (i Issue) InProgress() bool {
+	return slices.Contains(i.Labels, InProgressLabel)
+}
+
+// IsOpen reports whether the issue is open.
+func (i Issue) IsOpen() bool {
+	return i.State == "OPEN"
+}
+
+// OpenBlockers returns the numbers of open blocking issues; closed blockers
+// are non-blocking.
+func (i Issue) OpenBlockers() []int {
+	var out []int
+	for _, b := range i.BlockedBy {
+		if b.State == "OPEN" {
+			out = append(out, b.Number)
+		}
+	}
+	return out
+}
+
+// Untriaged reports whether a non-epic issue is missing its priority or
+// type label — a normal state for issues filed outside the tool, never a
+// defect. Epics are containers and exempt.
+func (i Issue) Untriaged() bool {
+	if i.IsEpic() {
+		return false
+	}
+	p, _ := i.Priority()
+	t, _ := i.Type()
+	return p == PriorityUnknown || t == ""
+}
+
+// SortByPriority orders issues P0→P4 then P?, oldest (lowest number) first
+// within a priority. Stable and deterministic.
+func SortByPriority(issues []Issue) {
+	sort.SliceStable(issues, func(a, b int) bool {
+		pa, _ := issues[a].Priority()
+		pb, _ := issues[b].Priority()
+		if pa != pb {
+			return pa < pb
+		}
+		return issues[a].Number < issues[b].Number
+	})
+}
+
+// Ready returns open, non-epic, unclaimed issues with zero open blockers,
+// sorted by priority. Untriaged issues are included (invisible work is the
+// failure mode) and sort after explicitly-prioritized work via P?.
+func Ready(issues []Issue) []Issue {
+	var out []Issue
+	for _, i := range issues {
+		if !i.IsOpen() || i.IsEpic() || i.InProgress() || len(i.Assignees) > 0 {
+			continue
+		}
+		if len(i.OpenBlockers()) > 0 {
+			continue
+		}
+		out = append(out, i)
+	}
+	SortByPriority(out)
+	return out
+}
+
+// InProgressIssues returns open issues carrying the in-progress label,
+// sorted by priority.
+func InProgressIssues(issues []Issue) []Issue {
+	var out []Issue
+	for _, i := range issues {
+		if i.IsOpen() && i.InProgress() {
+			out = append(out, i)
+		}
+	}
+	SortByPriority(out)
+	return out
+}
+
+// Epics returns open issues that have sub-issues, sorted by priority.
+func Epics(issues []Issue) []Issue {
+	var out []Issue
+	for _, i := range issues {
+		if i.IsOpen() && i.IsEpic() {
+			out = append(out, i)
+		}
+	}
+	SortByPriority(out)
+	return out
+}
+
+// UntriagedIssues returns open untriaged issues, oldest first.
+func UntriagedIssues(issues []Issue) []Issue {
+	var out []Issue
+	for _, i := range issues {
+		if i.IsOpen() && i.Untriaged() {
+			out = append(out, i)
+		}
+	}
+	sort.SliceStable(out, func(a, b int) bool { return out[a].Number < out[b].Number })
+	return out
+}
+
+// ByNumber indexes issues by number.
+func ByNumber(issues []Issue) map[int]Issue {
+	m := make(map[int]Issue, len(issues))
+	for _, i := range issues {
+		m[i.Number] = i
+	}
+	return m
+}
