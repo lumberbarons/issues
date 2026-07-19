@@ -58,6 +58,11 @@ type Client interface {
 	// GetIssue fetches one issue in any state, including body and recent
 	// comments.
 	GetIssue(ctx context.Context, number int) (model.Issue, error)
+	// SearchIssues runs a repo-scoped text search over issues in both
+	// states, in the API's best-match order. Results are capped (see
+	// searchCap); total is the server's full match count so callers can
+	// warn on truncation.
+	SearchIssues(ctx context.Context, terms string) (issues []model.Issue, total int, err error)
 	CreateIssue(ctx context.Context, title, body string, labels []string) (model.Issue, error)
 	EditTitle(ctx context.Context, number int, title string) error
 	AddLabels(ctx context.Context, number int, labels []string) error

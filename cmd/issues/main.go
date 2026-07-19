@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	ucli "github.com/urfave/cli/v3"
@@ -80,9 +81,10 @@ func root() *ucli.Command {
 		Version: version,
 		Flags:   globalFlags(),
 		Commands: []*ucli.Command{
-			primeCmd(), readyCmd(), listCmd(), showCmd(), createCmd(),
-			startCmd(), triageCmd(), setCmd(), closeCmd(), blockCmd(),
-			unblockCmd(), epicCmd(), initCmd(), hooksCmd(), migrateCmd(),
+			primeCmd(), readyCmd(), listCmd(), showCmd(), searchCmd(),
+			createCmd(), startCmd(), triageCmd(), setCmd(), closeCmd(),
+			blockCmd(), unblockCmd(), epicCmd(), initCmd(), hooksCmd(),
+			migrateCmd(),
 		},
 	}
 }
@@ -156,6 +158,22 @@ func showCmd() *ucli.Command {
 				return err
 			}
 			return app.Show(ctx, n)
+		},
+	}
+}
+
+func searchCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:      "search",
+		Usage:     "text search over open and closed issues — dedupe before filing",
+		ArgsUsage: "<terms>",
+		Flags:     globalFlags(),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Search(ctx, strings.Join(cmd.Args().Slice(), " "))
 		},
 	}
 }

@@ -23,6 +23,10 @@ const (
 	commentCap    = 5
 	labelCap      = 50
 	assigneeCap   = 10
+	// searchCap bounds search results deliberately: search exists to answer
+	// "does an issue for this already exist?", where best-match rank matters
+	// and an exhaustive page-through does not.
+	searchCap = 20
 )
 
 // GitHub implements Client against the real API via go-gh.
@@ -241,6 +245,40 @@ func (g *GitHub) GetIssue(ctx context.Context, number int) (model.Issue, error) 
 		return model.Issue{}, fmt.Errorf("issue #%d not found in %s", number, g.repo)
 	}
 	return resp.Repository.Issue.toModel(), nil
+}
+
+func (g *GitHub) SearchIssues(ctx context.Context, terms string) ([]model.Issue, int, error) {
+	query := fmt.Sprintf(`
+	query($q: String!) {
+		search(type: ISSUE, query: $q, first: %d) {
+			issueCount
+			nodes { ... on Issue {%s} }
+		}
+	}`, searchCap, issueFields)
+
+	var resp struct {
+		Search struct {
+			IssueCount int         `json:"issueCount"`
+			Nodes      []issueNode `json:"nodes"`
+		} `json:"search"`
+	}
+	// The repo scope and is:issue ride in the search string itself — the
+	// search API has no structured equivalents. User terms follow, so
+	// qualifiers like label:bug pass through.
+	q := fmt.Sprintf("repo:%s/%s is:issue %s", g.repo.Owner, g.repo.Name, terms)
+	if err := g.gql.DoWithContext(ctx, query, map[string]any{"q": q}, &resp); err != nil {
+		return nil, 0, wrapErr(err)
+	}
+	var out []model.Issue
+	for _, n := range resp.Search.Nodes {
+		// The inline fragment leaves non-issue nodes (a pull request matched
+		// via user-supplied qualifiers) empty; drop them.
+		if n.Number == 0 {
+			continue
+		}
+		out = append(out, n.toModel())
+	}
+	return out, resp.Search.IssueCount, nil
 }
 
 // notFoundError classifies a GraphQL NOT_FOUND error by the field it points

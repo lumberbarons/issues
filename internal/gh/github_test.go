@@ -275,6 +275,48 @@ func TestGetIssueMapsAllFields(t *testing.T) {
 	}
 }
 
+func TestSearchIssues(t *testing.T) {
+	f := newFakeServer(t)
+	// The empty object is a non-issue node (a PR matched via user-supplied
+	// qualifiers); it must be dropped, not mapped as issue #0.
+	f.graphql["search(type: ISSUE"] = fmt.Sprintf(
+		`{"data":{"search":{"issueCount":43,"nodes":[%s,{},%s]}}}`,
+		issueJSON(7, ""), issueJSON(9, ""))
+	issues, total, err := f.client(t).SearchIssues(context.Background(), "retry loop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 43 {
+		t.Errorf("total = %d, want 43", total)
+	}
+	if len(issues) != 2 || issues[0].Number != 7 || issues[1].Number != 9 {
+		t.Fatalf("SearchIssues() = %+v", issues)
+	}
+	if issues[0].Labels[0] != "P2" {
+		t.Errorf("issue fields not mapped: %+v", issues[0])
+	}
+	// The repo scope and is:issue must ride in the search string variable —
+	// never interpolated into the query text, where user terms could corrupt
+	// the query — with the user's terms appended verbatim.
+	req := f.requests[len(f.requests)-1]
+	var payload struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.Unmarshal([]byte(req.Body), &payload); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	if payload.Variables["q"] != "repo:o/r is:issue retry loop" {
+		t.Errorf("search variable q = %v", payload.Variables["q"])
+	}
+	if strings.Contains(payload.Query, "retry loop") {
+		t.Errorf("terms interpolated into query text: %s", payload.Query)
+	}
+	if !strings.Contains(payload.Query, fmt.Sprintf("first: %d", searchCap)) {
+		t.Errorf("search not capped at %d: %s", searchCap, payload.Query)
+	}
+}
+
 func TestGetIssueNotFound(t *testing.T) {
 	f := newFakeServer(t)
 	f.graphql["issue(number:"] = `{"data":{"repository":{"issue":null}}}`

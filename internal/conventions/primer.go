@@ -4,7 +4,7 @@ package conventions
 // kept deliberately terse: the whole primer targets ~600 tokens.
 const PrimerStatic = `Workflow: issues ready → issues start <n> → branch (feat/|fix/|chore/) → PR "Fixes #n".
 Close via PR; issues close is for wontfix/duplicate only. Never work an epic directly.
-File discovered work: issues create ... --discovered-from <n>.
+File discovered work: issues search <terms> first (dupes), then issues create ... --discovered-from <n>.
 
 Conventions (enforced by the tool's write path):
 - One priority label P0(critical)..P4(backlog), default P2; one type label bug|enhancement|task.
@@ -17,7 +17,7 @@ Conventions (enforced by the tool's write path):
 Output: one line per issue — #n priority type (areas) title [blocked by #m; epic done/total; in progress @user].
 list sorts ready work first, then claimed, blocked, epics. Prefer text output; --json on list commands emits NDJSON.
 
-Commands: ready | list [--label X --epic N --closed] | show <n> | triage |
+Commands: ready | list [--label X --epic N --closed] | show <n> | search <terms> | triage |
 create --type T --title "..." [--priority Pn --area X --blocked-by N --parent N --discovered-from N --body-file F] |
 start <n> [--priority Pn] | set <n> [--priority Pn --type T --add-area X --remove-area X --parent N --no-parent --title "..."] |
 close <n> --reason "..." [--completed | --duplicate-of M] | block <n> --on <m> | unblock <n> --from <m> |
