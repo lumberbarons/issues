@@ -67,6 +67,10 @@ issues block <n> --on <m>         # native dependency, cycle-checked
 issues unblock <n> --from <m>
 issues epic create --title "..." [--children N,N]
 issues epic status [<n>]
+issues apply <plan.jsonl> [--dry-run] [--state F] [--throttle D]
+                                 # batch-create a whole set of issues from a JSONL
+                                 # plan — labels, bodies, parents, dependencies —
+                                 # checkpointed and resumable (see "Plan files")
 issues init
 issues hooks install|remove      # Claude Code SessionStart hook running `issues prime`
 issues migrate beads [--file F] [--state F] [--throttle D]
@@ -84,6 +88,28 @@ takes `--json` (stable flat schema; list commands emit NDJSON so output survives
 truncation and grep); every GitHub-touching command also takes `--repo owner/name`
 (`hooks` is local-only). Exit codes are meaningful: `3`
 means "already claimed, pick the next ready item", `4` means "run `gh auth login`".
+
+### Plan files
+
+`issues apply` turns a multi-issue workflow — decomposing a spec into phase
+epics and tasks, filing a batch of review findings — into: write a plan,
+dry-run it, apply it. One JSON object per line:
+
+```jsonl
+{"id":"epic1","title":"Voltgo support","type":"epic","priority":"P1","body":"### Goal\n..."}
+{"id":"scaffold","title":"Scaffold the driver","type":"task","parent":"epic1"}
+{"title":"Wire the collector","type":"task","parent":"epic1","blocked-by":["scaffold",42],"areas":["ble"]}
+```
+
+`type` is `bug|enhancement|task`, or `epic` for a parent issue (no type label,
+`Epic: ` title prefix). `priority` defaults to P2. `parent` and `blocked-by`
+take either a local `id` — a string, resolved to the created issue's number,
+so entries can reference each other before numbers exist — or an existing
+issue number. `discovered-from` adds the same origin link the create flag
+does. Creation is checkpointed to the `--state` file after every write, so a
+failed run resumes without creating duplicates; unknown fields, dangling
+references, and dependency cycles between entries are all rejected before
+anything is written.
 
 ## Design
 

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -77,7 +76,7 @@ func (a *App) MigrateBeads(ctx context.Context, opts MigrateOpts) error {
 		return nil
 	}
 
-	state, err := loadMigrationState(opts.StatePath)
+	state, err := loadBatchState(opts.StatePath)
 	if err != nil {
 		return err
 	}
@@ -87,7 +86,7 @@ func (a *App) MigrateBeads(ctx context.Context, opts MigrateOpts) error {
 		return nil
 	}
 
-	if err := a.ensureMigrationLabels(ctx, selected); err != nil {
+	if err := a.ensureLabels(ctx, beadAreaLabels(selected)); err != nil {
 		return err
 	}
 
@@ -151,39 +150,20 @@ func (a *App) migrationPlan(selected []beads.Bead, state map[string]int, skipped
 	a.printf("\n")
 }
 
-// ensureMigrationLabels creates the convention labels plus every area
-// label the beads carry, so creates never reference a missing label.
-func (a *App) ensureMigrationLabels(ctx context.Context, selected []beads.Bead) error {
-	existing, err := a.Client.ListLabels(ctx)
-	if err != nil {
-		return err
-	}
-	have := map[string]bool{}
-	for _, l := range existing {
-		have[l.Name] = true
-	}
-	var want []gh.Label
-	for _, l := range conventions.Labels {
-		want = append(want, gh.Label{Name: l.Name, Color: l.Color, Description: l.Description})
-	}
+// beadAreaLabels collects every distinct area label the beads carry, for
+// the ensureLabels bootstrap.
+func beadAreaLabels(selected []beads.Bead) []gh.Label {
+	var out []gh.Label
 	seen := map[string]bool{}
 	for _, b := range selected {
 		for _, area := range areaLabels(b.Labels) {
 			if !seen[area] {
 				seen[area] = true
-				want = append(want, gh.Label{Name: area, Color: "ededed", Description: "migrated from beads"})
+				out = append(out, gh.Label{Name: area, Color: "ededed", Description: "migrated from beads"})
 			}
 		}
 	}
-	for _, l := range want {
-		if have[l.Name] {
-			continue
-		}
-		if err := a.Client.CreateLabel(ctx, l); err != nil {
-			return fmt.Errorf("creating label %q: %w", l.Name, err)
-		}
-	}
-	return nil
+	return out
 }
 
 func (a *App) migrateCreate(ctx context.Context, selected []beads.Bead, state map[string]int, opts MigrateOpts, viewer *string) (int, error) {
@@ -212,7 +192,7 @@ func (a *App) migrateCreate(ctx context.Context, selected []beads.Bead, state ma
 			return created, fmt.Errorf("creating %s (rerun to resume): %w", b.ID, err)
 		}
 		state[b.ID] = issue.Number
-		if err := saveMigrationState(opts.StatePath, state); err != nil {
+		if err := saveBatchState(opts.StatePath, state); err != nil {
 			return created, err
 		}
 		created++
@@ -357,31 +337,3 @@ func clampPriority(p int) int {
 	return p
 }
 
-func loadMigrationState(path string) (map[string]int, error) {
-	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return map[string]int{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	var state map[string]int
-	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, fmt.Errorf("%s is not a valid migration state file: %w", path, err)
-	}
-	return state, nil
-}
-
-func saveMigrationState(path string, state map[string]int) error {
-	data, err := json.MarshalIndent(state, "", "  ") // map keys marshal sorted
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
-}
-
-func sleep(d time.Duration) {
-	if d > 0 {
-		time.Sleep(d)
-	}
-}

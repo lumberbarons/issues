@@ -33,8 +33,10 @@ var primerGlobalFlags = map[string]bool{
 // command so an exemption for one command can't hide the same flag drifting
 // undocumented on another.
 var omittedFlags = map[string]bool{
-	"create --edit": true, // interactive, not for agents
-	"start --force": true, // escape hatch
+	"create --edit":    true, // interactive, not for agents
+	"start --force":    true, // escape hatch
+	"apply --state":    true, // plumbing; the default is right
+	"apply --throttle": true, // plumbing; the default is right
 }
 
 type leaf struct {
