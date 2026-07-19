@@ -209,11 +209,25 @@ func TestSearchIssues(t *testing.T) {
 	if issues[0].Labels[0] != "P2" {
 		t.Errorf("issue fields not mapped: %+v", issues[0])
 	}
-	// The repo scope and is:issue must ride in the search string variable,
-	// with the user's terms appended.
+	// The repo scope and is:issue must ride in the search string variable —
+	// never interpolated into the query text, where user terms could corrupt
+	// the query — with the user's terms appended verbatim.
 	req := f.requests[len(f.requests)-1]
-	if !strings.Contains(req.Body, `repo:o/r is:issue retry loop`) {
-		t.Errorf("search string not scoped: %s", req.Body)
+	var payload struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.Unmarshal([]byte(req.Body), &payload); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	if payload.Variables["q"] != "repo:o/r is:issue retry loop" {
+		t.Errorf("search variable q = %v", payload.Variables["q"])
+	}
+	if strings.Contains(payload.Query, "retry loop") {
+		t.Errorf("terms interpolated into query text: %s", payload.Query)
+	}
+	if !strings.Contains(payload.Query, fmt.Sprintf("first: %d", searchCap)) {
+		t.Errorf("search not capped at %d: %s", searchCap, payload.Query)
 	}
 }
 

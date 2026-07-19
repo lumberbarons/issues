@@ -80,10 +80,13 @@ func TestSearchEmptyTermsIsUsageError(t *testing.T) {
 
 func TestSearchPropagatesAPIError(t *testing.T) {
 	f := newFake()
-	f.failOn["SearchIssues"] = errors.New("boom")
+	boom := errors.New("boom")
+	f.failOn["SearchIssues"] = boom
 	app, _, _ := newApp(f)
-	if err := app.Search(ctx, "retry"); err == nil {
-		t.Fatal("expected error")
+	// Identity matters, not just non-nil: main classifies errors (auth → exit
+	// 4) with errors.As, so Search must not re-wrap opaquely.
+	if err := app.Search(ctx, "retry"); !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the client's error", err)
 	}
 }
 
