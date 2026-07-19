@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "command": "issues prime",
+            "type": "command"
+          }
+        ]
+      }
+    ]
+  }
+}
