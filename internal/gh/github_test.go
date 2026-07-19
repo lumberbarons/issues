@@ -189,6 +189,34 @@ func TestGetIssueMapsAllFields(t *testing.T) {
 	}
 }
 
+func TestSearchIssues(t *testing.T) {
+	f := newFakeServer(t)
+	// The empty object is a non-issue node (a PR matched via user-supplied
+	// qualifiers); it must be dropped, not mapped as issue #0.
+	f.graphql["search(type: ISSUE"] = fmt.Sprintf(
+		`{"data":{"search":{"issueCount":43,"nodes":[%s,{},%s]}}}`,
+		issueJSON(7, ""), issueJSON(9, ""))
+	issues, total, err := f.client(t).SearchIssues(context.Background(), "retry loop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 43 {
+		t.Errorf("total = %d, want 43", total)
+	}
+	if len(issues) != 2 || issues[0].Number != 7 || issues[1].Number != 9 {
+		t.Fatalf("SearchIssues() = %+v", issues)
+	}
+	if issues[0].Labels[0] != "P2" {
+		t.Errorf("issue fields not mapped: %+v", issues[0])
+	}
+	// The repo scope and is:issue must ride in the search string variable,
+	// with the user's terms appended.
+	req := f.requests[len(f.requests)-1]
+	if !strings.Contains(req.Body, `repo:o/r is:issue retry loop`) {
+		t.Errorf("search string not scoped: %s", req.Body)
+	}
+}
+
 func TestGetIssueNotFound(t *testing.T) {
 	f := newFakeServer(t)
 	f.graphql["issue(number:"] = `{"data":{"repository":{"issue":null}}}`

@@ -53,6 +53,8 @@ issues prime                      # session-start context for agents
 issues ready                      # open, non-epic, zero open blockers; P0→P4 then P?
 issues list [--label X] [--epic N] [--closed]
 issues show <n>                   # body, deps, parent, children, recent comments
+issues search <terms>             # text search, open+closed, best-match order —
+                                  # check for an existing issue before filing one
 issues create --type bug|enhancement|task --title "..."
               [--priority P0..P4] [--area X] [--blocked-by N] [--parent N]
               [--discovered-from N] [--body-file F | --edit]  # --edit opens $EDITOR

@@ -117,7 +117,7 @@ func TestDiscoveredFrom(t *testing.T) {
 }
 
 func TestPrimerStaticMentionsCoreCommands(t *testing.T) {
-	for _, cmd := range []string{"issues ready", "start", "triage", "--discovered-from", "Fixes #n", "P0", "P4", "exit 3",
+	for _, cmd := range []string{"issues ready", "start", "triage", "issues search", "--discovered-from", "Fixes #n", "P0", "P4", "exit 3",
 		"### Where", "### Done when", "Area labels sparingly", "No title prefixes"} {
 		if !strings.Contains(PrimerStatic, cmd) {
 			t.Errorf("primer missing %q", cmd)

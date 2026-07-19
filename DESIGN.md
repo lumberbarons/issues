@@ -102,6 +102,12 @@ issues ready                      # open, non-epic, zero *open* blockers; sorted
                                   # P0→P4 then P?, oldest first within a priority
 issues list [--label X] [--epic N] [--closed]
 issues show <n>                   # detail: body, deps, parent, children, recent comments
+issues search <terms>             # repo-scoped text search over open+closed issues in
+                                  # best-match order — the dedupe step before filing
+                                  # discovered work ("already fixed" answers the question
+                                  # as well as "already filed"); results capped, warns
+                                  # on truncation instead of paging through
+
 issues create --type bug|enhancement|task [--priority P0..P4] [--area X]
               [--blocked-by N...] [--parent N] [--discovered-from N]
               --title "..." [--body-file F | --edit]

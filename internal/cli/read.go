@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/lumberbarons/issues/internal/conventions"
 	"github.com/lumberbarons/issues/internal/gh"
@@ -81,6 +82,25 @@ func (a *App) Show(ctx context.Context, number int) error {
 		return err
 	}
 	return a.emitIssue(issue)
+}
+
+// Search runs a repo-scoped text search over open and closed issues — the
+// dedupe step before filing discovered work, where "already fixed" answers
+// the question as well as "already filed". Output keeps the API's
+// best-match order rather than the list sort: relevance is the point.
+func (a *App) Search(ctx context.Context, terms string) error {
+	terms = strings.TrimSpace(terms)
+	if terms == "" {
+		return usageErr("usage: issues search <terms>")
+	}
+	issues, total, err := a.Client.SearchIssues(ctx, terms)
+	if err != nil {
+		return err
+	}
+	if total > len(issues) {
+		a.warnf("showing %d of %d matches; refine the terms", len(issues), total)
+	}
+	return a.emitList(issues, "no matches", render.List)
 }
 
 // Triage lists open issues missing their priority or type label, oldest

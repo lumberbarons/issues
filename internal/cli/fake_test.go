@@ -26,6 +26,9 @@ type fakeClient struct {
 	// also lands this login, as if another session won inside the guard
 	// window.
 	rivalOnAssign string
+	// searchTotal, when larger than the match count, simulates a capped
+	// search response where the server reports more matches than returned.
+	searchTotal int
 }
 
 func newFake(issues ...*model.Issue) *fakeClient {
@@ -137,6 +140,24 @@ func (f *fakeClient) GetIssue(ctx context.Context, number int) (model.Issue, err
 		return model.Issue{}, fmt.Errorf("issue #%d not found in o/r", number)
 	}
 	return *i, nil
+}
+
+// SearchIssues fakes best-match search as a case-insensitive substring
+// match over title and body, both states.
+func (f *fakeClient) SearchIssues(ctx context.Context, terms string) ([]model.Issue, int, error) {
+	if err := f.record("SearchIssues " + terms); err != nil {
+		return nil, 0, err
+	}
+	f.refreshRefs()
+	needle := strings.ToLower(terms)
+	var out []model.Issue
+	for _, i := range f.issues {
+		if strings.Contains(strings.ToLower(i.Title+" "+i.Body), needle) {
+			out = append(out, *i)
+		}
+	}
+	total := max(len(out), f.searchTotal)
+	return out, total, nil
 }
 
 func (f *fakeClient) CreateIssue(ctx context.Context, title, body string, labels []string) (model.Issue, error) {
