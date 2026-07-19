@@ -190,7 +190,7 @@ func TestMigrateBeadsRefusesCorruptState(t *testing.T) {
 	// A corrupt state file must abort, not be treated as "nothing migrated
 	// yet" — that would duplicate every already-migrated issue.
 	err := app.MigrateBeads(ctx, opts)
-	if err == nil || !strings.Contains(err.Error(), "not a valid migration state file") {
+	if err == nil || !strings.Contains(err.Error(), "not a valid resume-state file") {
 		t.Fatalf("err = %v", err)
 	}
 	if len(f.calls) != 0 {

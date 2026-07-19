@@ -21,7 +21,8 @@ Commands: ready | list [--label X --epic N --closed] | show <n> | search <terms>
 create --type T --title "..." [--priority Pn --area X --blocked-by N --parent N --discovered-from N --body-file F] |
 start <n> [--priority Pn] | set <n> [--priority Pn --type T --add-area X --remove-area X --parent N --no-parent --title "..."] |
 close <n> --reason "..." [--completed | --duplicate-of M] | block <n> --on <m> | unblock <n> --from <m> |
-epic create --title "..." [--children N,N] | epic status [<n>]. All take --json.`
+epic create --title "..." [--children N,N] | epic status [<n>] |
+apply <plan.jsonl> [--dry-run] (batch create from a JSONL plan; schema: issues apply --help). All take --json.`
 
 // ClaudeSnippet is what `issues init` prints for the repo's CLAUDE.md: the
 // point of prime is that the snippet stays this short.

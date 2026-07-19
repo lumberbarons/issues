@@ -86,8 +86,8 @@ func root() *ucli.Command {
 		Commands: []*ucli.Command{
 			primeCmd(), readyCmd(), listCmd(), showCmd(), searchCmd(),
 			createCmd(), startCmd(), triageCmd(), setCmd(), closeCmd(),
-			blockCmd(), unblockCmd(), epicCmd(), initCmd(), hooksCmd(),
-			migrateCmd(),
+			blockCmd(), unblockCmd(), epicCmd(), applyCmd(), initCmd(),
+			hooksCmd(), migrateCmd(),
 		},
 	}
 }
@@ -437,6 +437,43 @@ func hooksCmd() *ucli.Command {
 					return app.HooksRemove(root)
 				},
 			},
+		},
+	}
+}
+
+func applyCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:      "apply",
+		Usage:     "batch-create issues from a JSONL plan file (dry-runnable, resumable)",
+		ArgsUsage: "<plan.jsonl>",
+		Description: `One JSON object per line, each an issue to create:
+
+   {"id":"epic1","title":"Voltgo support","type":"epic","priority":"P1","body":"..."}
+   {"id":"scaffold","title":"Scaffold the driver","type":"task","parent":"epic1"}
+   {"title":"Collector","type":"task","parent":"epic1","blocked-by":["scaffold",42],"areas":["ble"]}
+
+Fields: title (required), type bug|enhancement|task|epic (required; epic means
+a parent issue — no type label, "Epic: " title prefix), priority P0..P4
+(default P2), areas, body, parent, blocked-by, discovered-from, id. parent and
+blocked-by take a local id (string) or an existing issue number. Creation is
+checkpointed after every write, so a failed run resumes without duplicates;
+dependency cycles between entries are rejected before anything is written.`,
+		Flags: append(globalFlags(),
+			&ucli.StringFlag{Name: "state", Usage: "resume-state `FILE` (default: <plan>.state.json)"},
+			&ucli.BoolFlag{Name: "dry-run", Usage: "print the plan without creating anything"},
+			&ucli.DurationFlag{Name: "throttle", Usage: "pause between writes", Value: 500 * time.Millisecond},
+		),
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.Apply(ctx, appcli.ApplyOpts{
+				File:      cmd.Args().First(),
+				StatePath: cmd.String("state"),
+				DryRun:    cmd.Bool("dry-run"),
+				Throttle:  cmd.Duration("throttle"),
+			})
 		},
 	}
 }

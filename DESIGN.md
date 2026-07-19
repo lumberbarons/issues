@@ -128,6 +128,18 @@ issues block <n> --on <m>         # add dependency (cycle-checked)
 issues unblock <n> --from <m>
 issues epic create --title "..." [--children N,N,N]
 issues epic status [<n>]          # progress rollup per epic
+issues apply <plan.jsonl>         # batch-create from a JSONL plan: one entry per line
+                                  # (title/type/priority/areas/body, parent and
+                                  # blocked-by), the migrate machinery generalized.
+                                  # Entries carry a local id so later entries can
+                                  # reference earlier ones before numbers exist, the
+                                  # way migrate resolves bead IDs; "type":"epic" makes
+                                  # a parent issue, so epics with bodies work too.
+                                  # Checkpointed after every create → resumable
+                                  # without duplicates; --dry-run plans. Plan-internal
+                                  # dependency cycles are rejected up front — a
+                                  # complete check, since pre-existing issues can't
+                                  # reference entries that don't exist yet.
 issues init                       # bootstrap labels in a repo; print CLAUDE.md snippet
 issues hooks install|remove       # Claude Code SessionStart hook running `issues prime`
                                   # in the project's .claude/settings.json — the hook
