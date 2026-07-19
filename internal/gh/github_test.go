@@ -9,10 +9,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cli/go-gh/v2/pkg/api"
+
+	"github.com/lumberbarons/issues/internal/model"
 )
 
 // rewriteTransport sends every request to the test server, whatever host
@@ -36,6 +40,10 @@ type fakeServer struct {
 	requests []recordedRequest
 	// graphql maps a substring of the query to a response body.
 	graphql map[string]string
+	// graphqlFunc maps a substring of the query to a response computed from
+	// the request variables; it wins over the static graphql map, letting a
+	// test answer node-ID lookups with per-number IDs.
+	graphqlFunc map[string]func(vars map[string]any) string
 	// rest maps "METHOD path" to status + response body.
 	rest map[string]restResponse
 }
@@ -47,15 +55,26 @@ type restResponse struct {
 
 func newFakeServer(t *testing.T) *fakeServer {
 	t.Helper()
-	f := &fakeServer{graphql: map[string]string{}, rest: map[string]restResponse{}}
+	f := &fakeServer{
+		graphql:     map[string]string{},
+		graphqlFunc: map[string]func(vars map[string]any) string{},
+		rest:        map[string]restResponse{},
+	}
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		f.requests = append(f.requests, recordedRequest{Method: r.Method, Path: r.URL.Path, Body: string(body)})
 		if r.URL.Path == "/graphql" {
 			var payload struct {
-				Query string `json:"query"`
+				Query     string         `json:"query"`
+				Variables map[string]any `json:"variables"`
 			}
 			_ = json.Unmarshal(body, &payload)
+			for substr, fn := range f.graphqlFunc {
+				if strings.Contains(payload.Query, substr) {
+					fmt.Fprint(w, fn(payload.Variables))
+					return
+				}
+			}
 			for substr, resp := range f.graphql {
 				if strings.Contains(payload.Query, substr) {
 					fmt.Fprint(w, resp)
@@ -111,6 +130,33 @@ func issueJSON(number int, extra string) string {
 	return "{" + base + "}"
 }
 
+func decodeBody(t *testing.T, body string) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		t.Fatalf("request body is not JSON: %q: %v", body, err)
+	}
+	return m
+}
+
+// gqlVariables returns the variables of the first recorded GraphQL request
+// whose query mentions the given mutation.
+func gqlVariables(t *testing.T, f *fakeServer, mutation string) map[string]any {
+	t.Helper()
+	for _, r := range f.requests {
+		if !strings.Contains(r.Body, mutation+"(") {
+			continue
+		}
+		vars, _ := decodeBody(t, r.Body)["variables"].(map[string]any)
+		if vars == nil {
+			t.Fatalf("%s request has no variables: %s", mutation, r.Body)
+		}
+		return vars
+	}
+	t.Fatalf("no %s mutation was sent", mutation)
+	return nil
+}
+
 func TestViewer(t *testing.T) {
 	f := newFakeServer(t)
 	f.graphql["viewer"] = `{"data":{"viewer":{"login":"lumberbarons"}}}`
@@ -130,6 +176,11 @@ func TestListIssuesPaginates(t *testing.T) {
 		}
 		_ = json.Unmarshal(body, &payload)
 		page++
+		// The states filter is what keeps closed issues out of ready/prime;
+		// every page must carry it.
+		if got := payload.Variables["states"]; !reflect.DeepEqual(got, []any{"OPEN"}) {
+			t.Errorf("page %d states = %v, want [OPEN]", page, got)
+		}
 		if page == 1 {
 			if payload.Variables["cursor"] != nil {
 				t.Errorf("first page had cursor %v", payload.Variables["cursor"])
@@ -157,8 +208,8 @@ func TestListIssuesPaginates(t *testing.T) {
 func TestGetIssueMapsAllFields(t *testing.T) {
 	f := newFakeServer(t)
 	extra := `"body":"the body",
-		"comments":{"nodes":[{"author":{"login":"alice"},"createdAt":"2026-07-02T00:00:00Z","body":"hi"},{"author":null,"createdAt":"2026-07-03T00:00:00Z","body":"ghost"}]}`
-	node := `{"id":"NODE9","number":9,"title":"T","state":"OPEN","stateReason":null,
+		"comments":{"totalCount":7,"nodes":[{"author":{"login":"alice"},"createdAt":"2026-07-02T00:00:00Z","body":"hi"},{"author":null,"createdAt":"2026-07-03T00:00:00Z","body":"ghost"}]}`
+	node := `{"id":"NODE9","number":9,"title":"T","state":"OPEN","stateReason":"REOPENED",
 		"createdAt":"2026-07-01T00:00:00Z",
 		"labels":{"nodes":[{"name":"P1"}]},
 		"assignees":{"nodes":[{"login":"bob"}]},
@@ -172,20 +223,55 @@ func TestGetIssueMapsAllFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if i.Body != "the body" || i.Parent.Number != 3 || i.ParentTitle != "Epic: parent" {
+	if i.ID != "NODE9" || i.Number != 9 || i.Title != "T" || i.State != "OPEN" || i.StateReason != "REOPENED" {
+		t.Errorf("identity fields: %+v", i)
+	}
+	if !i.CreatedAt.Equal(time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("CreatedAt = %v", i.CreatedAt)
+	}
+	if i.Body != "the body" || i.Parent.Number != 3 || i.Parent.State != "OPEN" || i.ParentTitle != "Epic: parent" {
 		t.Errorf("core fields: %+v", i)
 	}
-	if i.SubIssuesCompleted != 1 || i.SubIssuesTotal != 2 || len(i.SubIssues) != 2 {
-		t.Errorf("sub-issue fields: %+v", i)
+	if !reflect.DeepEqual(i.Labels, []string{"P1"}) {
+		t.Errorf("labels: %+v", i.Labels)
 	}
-	if len(i.BlockedBy) != 1 || i.BlockedBy[0].Number != 4 {
-		t.Errorf("blockers: %+v", i.BlockedBy)
+	if i.SubIssuesCompleted != 1 || i.SubIssuesTotal != 2 {
+		t.Errorf("sub-issue counters: %+v", i)
 	}
-	if len(i.Comments) != 2 || i.Comments[0].Author != "alice" || i.Comments[1].Author != "" {
+	if want := []model.Ref{{Number: 10, State: "OPEN"}, {Number: 11, State: "CLOSED"}}; !reflect.DeepEqual(i.SubIssues, want) {
+		t.Errorf("sub-issues: %+v", i.SubIssues)
+	}
+	if want := []model.Ref{{Number: 4, State: "OPEN"}}; !reflect.DeepEqual(i.BlockedBy, want) || i.BlockedByTotal != 1 {
+		t.Errorf("blockers: %+v (total %d)", i.BlockedBy, i.BlockedByTotal)
+	}
+	if i.CommentsTotal != 7 {
+		t.Errorf("CommentsTotal = %d, want 7", i.CommentsTotal)
+	}
+	want := []model.Comment{
+		{Author: "alice", CreatedAt: time.Date(2026, 7, 2, 0, 0, 0, 0, time.UTC), Body: "hi"},
+		{Author: "", CreatedAt: time.Date(2026, 7, 3, 0, 0, 0, 0, time.UTC), Body: "ghost"},
+	}
+	if !reflect.DeepEqual(i.Comments, want) {
 		t.Errorf("comments: %+v", i.Comments)
 	}
-	if len(i.Assignees) != 1 || i.Assignees[0] != "bob" {
+	if !reflect.DeepEqual(i.Assignees, []string{"bob"}) {
 		t.Errorf("assignees: %+v", i.Assignees)
+	}
+
+	// The fake echoes canned JSON whatever the query selects, so pin the
+	// load-bearing selections in the query text itself.
+	query := f.requests[0].Body
+	for _, sel := range []string{
+		"comments(last:", "blockedBy(first:", "totalCount",
+		"subIssuesSummary { total completed }", "parent { number state title }",
+	} {
+		if !strings.Contains(query, sel) {
+			t.Errorf("GetIssue query no longer selects %q", sel)
+		}
+	}
+	// "body" must be selected twice: the issue body and each comment's body.
+	if strings.Count(query, "body") < 2 {
+		t.Errorf("GetIssue query no longer selects the issue body: %s", query)
 	}
 }
 
@@ -205,11 +291,24 @@ func TestCreateIssue(t *testing.T) {
 	if err != nil || i.Number != 42 || i.ID != "N1" {
 		t.Fatalf("CreateIssue() = %+v, %v", i, err)
 	}
-	req := f.requests[len(f.requests)-1]
-	for _, want := range []string{`"title":"New"`, `"body":"body text"`, `"P2"`} {
-		if !strings.Contains(req.Body, want) {
-			t.Errorf("request body missing %s: %s", want, req.Body)
-		}
+	got := decodeBody(t, f.requests[len(f.requests)-1].Body)
+	want := map[string]any{"title": "New", "body": "body text", "labels": []any{"P2", "bug"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("request payload = %v, want %v", got, want)
+	}
+}
+
+func TestCreateIssueOmitsEmptyBody(t *testing.T) {
+	f := newFakeServer(t)
+	f.rest["POST /repos/o/r/issues"] = restResponse{201, `{"node_id":"N1","number":42,"title":"New"}`}
+	if _, err := f.client(t).CreateIssue(context.Background(), "New", "", []string{"P2"}); err != nil {
+		t.Fatal(err)
+	}
+	got := decodeBody(t, f.requests[len(f.requests)-1].Body)
+	// An empty body must be omitted, not sent as "".
+	want := map[string]any{"title": "New", "labels": []any{"P2"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("request payload = %v, want %v", got, want)
 	}
 }
 
@@ -237,8 +336,23 @@ func TestSimpleRESTMutations(t *testing.T) {
 	if err := c.Comment(ctx, 5, "a note"); err != nil {
 		t.Error(err)
 	}
-	if len(f.requests) != 5 {
-		t.Errorf("recorded %d requests", len(f.requests))
+	// The payloads are the whole point of these thin wrappers: a 200 comes
+	// back whatever we send, so compare each request body exactly.
+	wantBodies := []map[string]any{
+		{"title": "Renamed"},
+		{"labels": []any{"P1"}},
+		{"assignees": []any{"me"}},
+		{"assignees": []any{"other"}},
+		{"body": "a note"},
+	}
+	if len(f.requests) != len(wantBodies) {
+		t.Fatalf("recorded %d requests, want %d", len(f.requests), len(wantBodies))
+	}
+	for i, want := range wantBodies {
+		got := decodeBody(t, f.requests[i].Body)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s %s payload = %v, want %v", f.requests[i].Method, f.requests[i].Path, got, want)
+		}
 	}
 }
 
@@ -257,8 +371,11 @@ func TestRemoveLabelToleratesMissing(t *testing.T) {
 
 func TestGraphQLMutations(t *testing.T) {
 	f := newFakeServer(t)
-	// The mutation APIs resolve issue numbers to node IDs first.
-	f.graphql["issue(number:"] = `{"data":{"repository":{"issue":{"id":"NODE"}}}}`
+	// The mutation APIs resolve issue numbers to node IDs first. Answer with
+	// a distinct ID per number so a swapped edge direction is detectable.
+	f.graphqlFunc["issue(number:"] = func(vars map[string]any) string {
+		return fmt.Sprintf(`{"data":{"repository":{"issue":{"id":"NODE%v"}}}}`, vars["number"])
+	}
 	f.graphql["closeIssue"] = `{"data":{"closeIssue":{"clientMutationId":null}}}`
 	f.graphql["addBlockedBy"] = `{"data":{"addBlockedBy":{"clientMutationId":null}}}`
 	f.graphql["removeBlockedBy"] = `{"data":{"removeBlockedBy":{"clientMutationId":null}}}`
@@ -281,6 +398,21 @@ func TestGraphQLMutations(t *testing.T) {
 	if err := c.RemoveSubIssue(ctx, 1, 2); err != nil {
 		t.Error(err)
 	}
+	// #1 is blocked by #2: issueId must be #1's node, blockingIssueId #2's.
+	for _, mutation := range []string{"addBlockedBy", "removeBlockedBy"} {
+		got := gqlVariables(t, f, mutation)
+		want := map[string]any{"id": "NODE1", "blocking": "NODE2"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s variables = %v, want %v", mutation, got, want)
+		}
+	}
+	// #1 is the parent, #2 the child, and replaceParent must pass through.
+	if got, want := gqlVariables(t, f, "addSubIssue"), (map[string]any{"parent": "NODE1", "child": "NODE2", "replace": true}); !reflect.DeepEqual(got, want) {
+		t.Errorf("addSubIssue variables = %v, want %v", got, want)
+	}
+	if got, want := gqlVariables(t, f, "removeSubIssue"), (map[string]any{"parent": "NODE1", "child": "NODE2"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("removeSubIssue variables = %v, want %v", got, want)
+	}
 	// The close reason must ride in the variables as an enum value, not be
 	// interpolated into the query text.
 	var sawClose bool
@@ -292,12 +424,12 @@ func TestGraphQLMutations(t *testing.T) {
 		if strings.Contains(r.Body, "stateReason: NOT_PLANNED") {
 			t.Errorf("stateReason interpolated into query: %s", r.Body)
 		}
-		if !strings.Contains(r.Body, `"reason":"NOT_PLANNED"`) {
-			t.Errorf("stateReason not sent as a variable: %s", r.Body)
-		}
 	}
 	if !sawClose {
 		t.Error("no closeIssue mutation was sent")
+	}
+	if got, want := gqlVariables(t, f, "closeIssue"), (map[string]any{"id": "NODE1", "reason": "NOT_PLANNED"}); !reflect.DeepEqual(got, want) {
+		t.Errorf("closeIssue variables = %v, want %v", got, want)
 	}
 }
 

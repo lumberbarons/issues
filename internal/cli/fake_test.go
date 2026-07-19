@@ -21,15 +21,30 @@ type fakeClient struct {
 	comments map[int][]string
 	calls    []string
 	failOn   map[string]error
-	nextNum  int
+	// failAfter fails a method once its call count exceeds the threshold,
+	// letting a flow's earlier calls of the same method succeed — e.g.
+	// migrate creating one issue before the API dies.
+	failAfter  map[string]failPoint
+	callCounts map[string]int
+	nextNum    int
 	// rivalOnAssign simulates a same-user claim race: every AddAssignee
 	// also lands this login, as if another session won inside the guard
 	// window.
 	rivalOnAssign string
 }
 
+// failPoint is a failAfter entry: calls successful calls, then err.
+type failPoint struct {
+	calls int
+	err   error
+}
+
 func newFake(issues ...*model.Issue) *fakeClient {
-	f := &fakeClient{viewer: "me", comments: map[int][]string{}, failOn: map[string]error{}, nextNum: 100}
+	f := &fakeClient{
+		viewer: "me", comments: map[int][]string{},
+		failOn: map[string]error{}, failAfter: map[string]failPoint{},
+		callCounts: map[string]int{}, nextNum: 100,
+	}
 	for _, i := range issues {
 		if i.ID == "" {
 			i.ID = fmt.Sprintf("ID%d", i.Number)
@@ -47,7 +62,12 @@ func newFake(issues ...*model.Issue) *fakeClient {
 
 func (f *fakeClient) record(call string) error {
 	f.calls = append(f.calls, call)
-	return f.failOn[strings.SplitN(call, " ", 2)[0]]
+	method := strings.SplitN(call, " ", 2)[0]
+	f.callCounts[method]++
+	if fp, ok := f.failAfter[method]; ok && f.callCounts[method] > fp.calls {
+		return fp.err
+	}
+	return f.failOn[method]
 }
 
 func (f *fakeClient) byNumber(n int) *model.Issue {
@@ -157,7 +177,11 @@ func (f *fakeClient) EditTitle(ctx context.Context, number int, title string) er
 	if err := f.record(fmt.Sprintf("EditTitle %d %q", number, title)); err != nil {
 		return err
 	}
-	f.byNumber(number).Title = title
+	i, err := f.requireIssue(number)
+	if err != nil {
+		return err
+	}
+	i.Title = title
 	return nil
 }
 
@@ -165,7 +189,10 @@ func (f *fakeClient) AddLabels(ctx context.Context, number int, labels []string)
 	if err := f.record(fmt.Sprintf("AddLabels %d %s", number, strings.Join(labels, ","))); err != nil {
 		return err
 	}
-	i := f.byNumber(number)
+	i, err := f.requireIssue(number)
+	if err != nil {
+		return err
+	}
 	for _, l := range labels {
 		if !slices.Contains(i.Labels, l) {
 			i.Labels = append(i.Labels, l)
@@ -178,7 +205,10 @@ func (f *fakeClient) RemoveLabel(ctx context.Context, number int, label string) 
 	if err := f.record(fmt.Sprintf("RemoveLabel %d %s", number, label)); err != nil {
 		return err
 	}
-	i := f.byNumber(number)
+	i, err := f.requireIssue(number)
+	if err != nil {
+		return err
+	}
 	i.Labels = slices.DeleteFunc(slices.Clone(i.Labels), func(l string) bool { return l == label })
 	return nil
 }
@@ -187,7 +217,10 @@ func (f *fakeClient) AddAssignee(ctx context.Context, number int, login string) 
 	if err := f.record(fmt.Sprintf("AddAssignee %d %s", number, login)); err != nil {
 		return err
 	}
-	i := f.byNumber(number)
+	i, err := f.requireIssue(number)
+	if err != nil {
+		return err
+	}
 	if !slices.Contains(i.Assignees, login) {
 		i.Assignees = append(i.Assignees, login)
 	}
@@ -201,13 +234,19 @@ func (f *fakeClient) RemoveAssignees(ctx context.Context, number int, logins []s
 	if err := f.record(fmt.Sprintf("RemoveAssignees %d %s", number, strings.Join(logins, ","))); err != nil {
 		return err
 	}
-	i := f.byNumber(number)
+	i, err := f.requireIssue(number)
+	if err != nil {
+		return err
+	}
 	i.Assignees = slices.DeleteFunc(slices.Clone(i.Assignees), func(l string) bool { return slices.Contains(logins, l) })
 	return nil
 }
 
 func (f *fakeClient) Comment(ctx context.Context, number int, body string) error {
 	if err := f.record(fmt.Sprintf("Comment %d %q", number, body)); err != nil {
+		return err
+	}
+	if _, err := f.requireIssue(number); err != nil {
 		return err
 	}
 	f.comments[number] = append(f.comments[number], body)
@@ -238,6 +277,16 @@ func (f *fakeClient) AddBlockedBy(ctx context.Context, number, blockingNumber in
 	b, err := f.requireIssue(blockingNumber)
 	if err != nil {
 		return err
+	}
+	// The real API rejects self-blocks and direct two-issue cycles (and
+	// only those — longer cycles are silently accepted, per the DESIGN.md
+	// spike), so the fake must too: a client-side check that regressed to
+	// miss these must not look like success here.
+	if number == blockingNumber {
+		return fmt.Errorf("issue #%d cannot block itself", number)
+	}
+	if slices.ContainsFunc(b.BlockedBy, func(r model.Ref) bool { return r.Number == number }) {
+		return fmt.Errorf("issues #%d and #%d would block each other", number, blockingNumber)
 	}
 	i.BlockedBy = append(i.BlockedBy, model.Ref{Number: b.Number, State: b.State})
 	return nil

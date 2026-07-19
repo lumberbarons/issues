@@ -47,6 +47,9 @@ func (a *App) Create(ctx context.Context, opts CreateOpts) error {
 	if opts.BodyFile != "" && opts.Edit {
 		return usageErr("--body-file and --edit are mutually exclusive")
 	}
+	if err := validateAreas("--area", opts.Areas); err != nil {
+		return err
+	}
 
 	body, err := a.composeBody(opts)
 	if err != nil {
@@ -207,6 +210,12 @@ func (a *App) Set(ctx context.Context, number int, opts SetOpts) error {
 	if opts.Type != "" && !model.IsType(opts.Type) {
 		return usageErr("--type must be one of %s", strings.Join(model.Types, "|"))
 	}
+	if err := validateAreas("--add-area", opts.AddAreas); err != nil {
+		return err
+	}
+	if err := validateAreas("--remove-area", opts.RemoveAreas); err != nil {
+		return err
+	}
 	issue, err := a.Client.GetIssue(ctx, number)
 	if err != nil {
 		return err
@@ -268,6 +277,22 @@ func (a *App) Set(ctx context.Context, number int, opts SetOpts) error {
 		}
 	}
 	return a.reportMutation(ctx, number, "updated #%d\n", number)
+}
+
+// validateAreas refuses area names that collide with the priority/type
+// vocabulary: passing them through verbatim would stack a second convention
+// label (or strip the only one), breaking the exactly-one invariant the
+// write path exists to enforce.
+func validateAreas(flag string, areas []string) error {
+	for _, area := range areas {
+		if _, ok := model.ParsePriority(area); ok {
+			return usageErr("%s %q is a priority label; use --priority", flag, area)
+		}
+		if model.IsType(area) {
+			return usageErr("%s %q is a type label; use --type", flag, area)
+		}
+	}
+	return nil
 }
 
 // swapType enforces the one-type-label invariant: remove the others, add the

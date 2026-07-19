@@ -27,11 +27,34 @@ func exitCode(t *testing.T, err error, want int) {
 }
 
 func TestCreateValidation(t *testing.T) {
-	app, _, _ := newApp(newFake())
+	f := newFake()
+	app, _, _ := newApp(f)
 	exitCode(t, app.Create(ctx, CreateOpts{Type: "bug"}), ExitUsage)
 	exitCode(t, app.Create(ctx, CreateOpts{Title: "T", Type: "story"}), ExitUsage)
 	exitCode(t, app.Create(ctx, CreateOpts{Title: "T", Type: "bug", Priority: "P9"}), ExitUsage)
 	exitCode(t, app.Create(ctx, CreateOpts{Title: "T", Type: "bug", BodyFile: "f", Edit: true}), ExitUsage)
+	// Usage errors mean "nothing happened": no issue may leak out before
+	// validation completes.
+	if len(f.calls) != 0 {
+		t.Errorf("refused creates still called the API: %v", f.calls)
+	}
+}
+
+func TestAreaFlagsRejectConventionLabels(t *testing.T) {
+	f := newFake(issue(1, "Work", "P2", "bug"))
+	app, _, _ := newApp(f)
+	// Smuggling a priority or type through an area flag would stack a second
+	// convention label (or strip the only one) — refuse before mutating.
+	exitCode(t, app.Create(ctx, CreateOpts{Title: "T", Type: "bug", Areas: []string{"P0"}}), ExitUsage)
+	exitCode(t, app.Create(ctx, CreateOpts{Title: "T", Type: "bug", Areas: []string{"task"}}), ExitUsage)
+	exitCode(t, app.Set(ctx, 1, SetOpts{AddAreas: []string{"task"}}), ExitUsage)
+	exitCode(t, app.Set(ctx, 1, SetOpts{RemoveAreas: []string{"P2"}}), ExitUsage)
+	if len(f.calls) != 0 {
+		t.Errorf("refused area flags still called the API: %v", f.calls)
+	}
+	if got := f.byNumber(1).Labels; !reflect.DeepEqual(got, []string{"P2", "bug"}) {
+		t.Errorf("labels mutated despite refusal: %v", got)
+	}
 }
 
 func TestCreateDefaults(t *testing.T) {
@@ -169,6 +192,15 @@ func TestStartRefusesClaimed(t *testing.T) {
 		t.Errorf("message should name the claimant: %v", err)
 	}
 	exitCode(t, app.Start(ctx, 2, "", false), ExitClaimed)
+	// The refusal must come before any mutation: the claimant keeps the
+	// issue exactly as it was.
+	one := f.byNumber(1)
+	if !reflect.DeepEqual(one.Assignees, []string{"other"}) || slices.Contains(one.Labels, "in-progress") {
+		t.Errorf("refused start mutated #1: labels=%v assignees=%v", one.Labels, one.Assignees)
+	}
+	if got := f.byNumber(2).Assignees; len(got) != 0 {
+		t.Errorf("refused start assigned #2: %v", got)
+	}
 }
 
 func TestStartForceSteals(t *testing.T) {
@@ -371,12 +403,20 @@ func TestCloseValidation(t *testing.T) {
 	app, _, _ := newApp(f)
 	exitCode(t, app.Close(ctx, 1, "r", true, 5), ExitUsage)
 	exitCode(t, app.Close(ctx, 1, "", false, 0), ExitUsage)
+	if len(f.calls) != 0 || len(f.comments[1]) != 0 {
+		t.Errorf("refused close still touched the API: calls=%v comments=%v", f.calls, f.comments[1])
+	}
 	closed := issue(2, "Closed", "P2", "bug")
 	closed.State = "CLOSED"
 	f2 := newFake(closed)
 	app2, _, _ := newApp(f2)
 	if err := app2.Close(ctx, 2, "r", false, 0); err == nil || !strings.Contains(err.Error(), "already closed") {
 		t.Errorf("err = %v", err)
+	}
+	// The already-closed guard runs before the reason comment posts:
+	// re-closing must not spam a comment onto the closed issue.
+	if len(f2.comments[2]) != 0 {
+		t.Errorf("refused close still commented: %v", f2.comments[2])
 	}
 }
 
@@ -404,6 +444,34 @@ func TestBlockRefusesCycle(t *testing.T) {
 	app, _, _ := newApp(f)
 	err := app.Block(ctx, 1, 2)
 	if err == nil || !strings.Contains(err.Error(), "cycle #1 → #2 → #3 → #1") {
+		t.Errorf("err = %v", err)
+	}
+	if len(f.byNumber(1).BlockedBy) != 0 {
+		t.Error("edge added despite refusal")
+	}
+}
+
+func TestBlockRefusesSelfBlock(t *testing.T) {
+	f := newFake(issue(1, "A", "P2", "bug"))
+	app, _, _ := newApp(f)
+	err := app.Block(ctx, 1, 1)
+	if err == nil || !strings.Contains(err.Error(), "cycle #1 → #1") {
+		t.Errorf("err = %v", err)
+	}
+	if len(f.byNumber(1).BlockedBy) != 0 {
+		t.Error("self-edge added despite refusal")
+	}
+}
+
+func TestBlockRefusesTwoCycle(t *testing.T) {
+	// GitHub's API would reject this direct back-edge itself, but the
+	// client-side check must catch it first so the refusal is uniform.
+	b := issue(2, "B", "P2", "bug")
+	b.BlockedBy = []model.Ref{{Number: 1, State: "OPEN"}}
+	f := newFake(issue(1, "A", "P2", "bug"), b)
+	app, _, _ := newApp(f)
+	err := app.Block(ctx, 1, 2)
+	if err == nil || !strings.Contains(err.Error(), "cycle #1 → #2 → #1") {
 		t.Errorf("err = %v", err)
 	}
 	if len(f.byNumber(1).BlockedBy) != 0 {

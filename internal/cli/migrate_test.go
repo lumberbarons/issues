@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -131,6 +132,69 @@ func TestMigrateBeadsResume(t *testing.T) {
 	}
 	if state["sc-epic"] != 55 || state["sc-1"] == 0 || state["sc-2"] == 0 {
 		t.Errorf("state = %v", state)
+	}
+}
+
+func TestMigrateBeadsResumesAfterCreateFailure(t *testing.T) {
+	f, app, opts := migrateSetup(t, migrationFixture)
+	// The API dies on the second create: the first bead's mapping must
+	// already be on disk (state is persisted after every create, not once at
+	// the end), and a rerun must pick up where the crash left off.
+	f.failAfter["CreateIssue"] = failPoint{calls: 1, err: errors.New("boom")}
+	err := app.MigrateBeads(ctx, opts)
+	if err == nil || !strings.Contains(err.Error(), "rerun to resume") {
+		t.Fatalf("err = %v", err)
+	}
+	data, readErr := os.ReadFile(opts.StatePath)
+	if readErr != nil {
+		t.Fatalf("no state persisted before the crash: %v", readErr)
+	}
+	var state map[string]int
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state) != 1 || state["sc-epic"] != 101 {
+		t.Fatalf("state after crash = %v", state)
+	}
+
+	delete(f.failAfter, "CreateIssue")
+	if err := app.MigrateBeads(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.issues) != 3 {
+		t.Errorf("resume duplicated issues: %d created", len(f.issues))
+	}
+	epics := 0
+	for _, i := range f.issues {
+		if i.Title == "Epic: Voltgo support" {
+			epics++
+		}
+	}
+	if epics != 1 {
+		t.Errorf("epic recreated on resume: %d copies", epics)
+	}
+	data, _ = os.ReadFile(opts.StatePath)
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state) != 3 || state["sc-epic"] != 101 {
+		t.Errorf("state after resume = %v", state)
+	}
+}
+
+func TestMigrateBeadsRefusesCorruptState(t *testing.T) {
+	f, app, opts := migrateSetup(t, migrationFixture)
+	if err := os.WriteFile(opts.StatePath, []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A corrupt state file must abort, not be treated as "nothing migrated
+	// yet" — that would duplicate every already-migrated issue.
+	err := app.MigrateBeads(ctx, opts)
+	if err == nil || !strings.Contains(err.Error(), "not a valid migration state file") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.calls) != 0 {
+		t.Errorf("API calls made despite corrupt state: %v", f.calls)
 	}
 }
 

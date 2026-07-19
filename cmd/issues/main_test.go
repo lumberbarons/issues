@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -21,14 +22,19 @@ var setupCommands = map[string]bool{
 	"migrate": true,
 }
 
-// omittedFlags are deliberately absent from the terse primer: the two global
-// flags (documented once as "All take --json") plus escape hatches an agent
-// doesn't need in the common loop.
+// primerGlobalFlags are documented once in the primer as "All take --json",
+// not repeated in every entry.
+var primerGlobalFlags = map[string]bool{
+	"json": true,
+	"repo": true,
+}
+
+// omittedFlags are deliberately absent from the terse primer, keyed by
+// command so an exemption for one command can't hide the same flag drifting
+// undocumented on another.
 var omittedFlags = map[string]bool{
-	"json":  true,
-	"repo":  true,
-	"edit":  true, // create --edit: interactive, not for agents
-	"force": true, // start --force: escape hatch
+	"create --edit": true, // interactive, not for agents
+	"start --force": true, // escape hatch
 }
 
 type leaf struct {
@@ -52,26 +58,73 @@ func leaves(cmd *ucli.Command, top string) []leaf {
 	return out
 }
 
+// primerCommandEntries splits the primer's Commands section into one entry
+// per command, keyed by the qualified command name ("ready", "epic create").
+// Scoping the checks to a command's own entry is what makes them honest: a
+// whole-primer substring search would pass on incidental prose matches
+// ("untriaged" contains "triage") or on the same flag documented for a
+// different command.
+func primerCommandEntries(t *testing.T) map[string]string {
+	t.Helper()
+	_, section, found := strings.Cut(conventions.PrimerStatic, "Commands:")
+	if !found {
+		t.Fatal("primer has no Commands section")
+	}
+	var entries []string
+	for frag := range strings.SplitSeq(section, "|") {
+		frag = strings.TrimSpace(frag)
+		if frag == "" {
+			continue
+		}
+		// A fragment starting with a dash is the tail of a bracketed
+		// alternative ("[--completed | --duplicate-of M]"), not a command —
+		// rejoin it with its entry.
+		if strings.HasPrefix(frag, "-") && len(entries) > 0 {
+			entries[len(entries)-1] += " " + frag
+			continue
+		}
+		entries = append(entries, frag)
+	}
+	isWord := regexp.MustCompile(`^[a-z]+$`).MatchString
+	out := map[string]string{}
+	for _, e := range entries {
+		fields := strings.Fields(e)
+		key := fields[0]
+		if len(fields) > 1 && isWord(fields[1]) {
+			key += " " + fields[1] // subcommand entry, e.g. "epic create"
+		}
+		out[key] = e
+	}
+	return out
+}
+
 // TestPrimerMatchesCommandSurface is the cross-check that keeps PrimerStatic
-// honest: every agent-facing command and flag defined in the command tree
-// must appear in the primer (or be an explicit deliberate omission), so the
+// honest: every agent-facing command must have its own entry in the primer's
+// Commands section, and every agent-facing flag must appear in that
+// command's entry (or be an explicit deliberate omission), so the
 // hand-written cheatsheet can't silently drift from the real surface.
 func TestPrimerMatchesCommandSurface(t *testing.T) {
-	primer := conventions.PrimerStatic
+	entries := primerCommandEntries(t)
 	for _, lf := range leaves(root(), "") {
 		if setupCommands[lf.topName] {
 			continue
 		}
-		if !strings.Contains(primer, lf.name) {
-			t.Errorf("primer omits command %q", lf.name)
+		qualified := lf.name
+		if lf.topName != lf.name {
+			qualified = lf.topName + " " + lf.name
+		}
+		entry, ok := entries[qualified]
+		if !ok {
+			t.Errorf("primer's Commands section omits %q", qualified)
+			continue
 		}
 		for _, fl := range lf.flags {
 			name := fl.Names()[0]
-			if omittedFlags[name] {
+			if primerGlobalFlags[name] || omittedFlags[qualified+" --"+name] {
 				continue
 			}
-			if !strings.Contains(primer, "--"+name) {
-				t.Errorf("primer omits flag --%s (on %q)", name, lf.name)
+			if !regexp.MustCompile(`--` + regexp.QuoteMeta(name) + `\b`).MatchString(entry) {
+				t.Errorf("primer entry for %q omits flag --%s: %q", qualified, name, entry)
 			}
 		}
 	}
