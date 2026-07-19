@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -127,6 +128,91 @@ func TestPrimerMatchesCommandSurface(t *testing.T) {
 				t.Errorf("primer entry for %q omits flag --%s: %q", qualified, name, entry)
 			}
 		}
+	}
+}
+
+// findCommand walks the command tree by name path (e.g. "epic", "status").
+func findCommand(t *testing.T, cmd *ucli.Command, path ...string) *ucli.Command {
+	t.Helper()
+	for _, name := range path {
+		var next *ucli.Command
+		for _, c := range cmd.Commands {
+			if c.Name == name {
+				next = c
+				break
+			}
+		}
+		if next == nil {
+			t.Fatalf("command %q not found under %q", name, cmd.Name)
+		}
+		cmd = next
+	}
+	return cmd
+}
+
+// TestRepoFlagReachesCommand covers #25: the global --repo must reach the
+// command in either position. Before the fix, `issues --repo owner/name <cmd>`
+// parsed without error but the leaf's own shadowing --repo flag stayed empty,
+// so writes silently went to the git-remote-detected repo. Actions are swapped
+// for capture functions so the real flag wiring is exercised without a GitHub
+// client.
+func TestRepoFlagReachesCommand(t *testing.T) {
+	const want = "octo/hello"
+	cases := []struct {
+		name string
+		path []string
+		args []string
+	}{
+		{"read before subcommand", []string{"list"}, []string{"issues", "--repo", want, "list"}},
+		{"read after subcommand", []string{"list"}, []string{"issues", "list", "--repo", want}},
+		{"write before subcommand", []string{"create"}, []string{"issues", "--repo", want, "create", "--type", "task", "--title", "t"}},
+		{"write after subcommand", []string{"create"}, []string{"issues", "create", "--repo", want, "--type", "task", "--title", "t"}},
+		{"nested subcommand", []string{"epic", "status"}, []string{"issues", "--repo", want, "epic", "status"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := root()
+			var got string
+			findCommand(t, app, tc.path...).Action = func(_ context.Context, cmd *ucli.Command) error {
+				got = cmd.String("repo")
+				return nil
+			}
+			if err := app.Run(context.Background(), tc.args); err != nil {
+				t.Fatalf("run %v: %v", tc.args, err)
+			}
+			if got != want {
+				t.Errorf("run %v: repo = %q, want %q", tc.args, got, want)
+			}
+		})
+	}
+}
+
+// TestJSONFlagReachesCommand: --json shares the same declared-once-at-root
+// wiring as --repo and would be silently dropped by the same shadowing bug.
+func TestJSONFlagReachesCommand(t *testing.T) {
+	cases := []struct {
+		name string
+		path []string
+		args []string
+	}{
+		{"before subcommand", []string{"ready"}, []string{"issues", "--json", "ready"}},
+		{"after subcommand", []string{"ready"}, []string{"issues", "ready", "--json"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := root()
+			var got bool
+			findCommand(t, app, tc.path...).Action = func(_ context.Context, cmd *ucli.Command) error {
+				got = cmd.Bool("json")
+				return nil
+			}
+			if err := app.Run(context.Background(), tc.args); err != nil {
+				t.Fatalf("run %v: %v", tc.args, err)
+			}
+			if !got {
+				t.Errorf("run %v: json = false, want true", tc.args)
+			}
+		})
 	}
 }
 

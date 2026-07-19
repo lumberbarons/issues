@@ -31,8 +31,11 @@ func main() {
 	}
 }
 
-// globalFlags are attached to every leaf command so they work in either
-// position (`issues --json ready` and `issues ready --json`).
+// globalFlags are declared on the root command only. urfave/cli v3 flags
+// are persistent by default, so they parse in either position (`issues
+// --json ready` and `issues ready --json`) and leaf actions resolve them
+// via lineage lookup. Re-declaring them on a leaf would shadow the root's
+// parsed value with an empty one (#25), so leaves must not repeat them.
 func globalFlags() []ucli.Flag {
 	return []ucli.Flag{
 		&ucli.BoolFlag{Name: "json", Usage: "structured output with a stable schema"},
@@ -93,7 +96,6 @@ func primeCmd() *ucli.Command {
 	return &ucli.Command{
 		Name:  "prime",
 		Usage: "session-start context: conventions, ready work, live state",
-		Flags: globalFlags(),
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			app, err := buildApp(cmd)
 			if err != nil {
@@ -108,7 +110,6 @@ func readyCmd() *ucli.Command {
 	return &ucli.Command{
 		Name:  "ready",
 		Usage: "open, non-epic issues with zero open blockers, priority-sorted",
-		Flags: globalFlags(),
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			app, err := buildApp(cmd)
 			if err != nil {
@@ -123,11 +124,11 @@ func listCmd() *ucli.Command {
 	return &ucli.Command{
 		Name:  "list",
 		Usage: "list issues (open by default)",
-		Flags: append(globalFlags(),
+		Flags: []ucli.Flag{
 			&ucli.StringFlag{Name: "label", Usage: "only issues with this label"},
 			&ucli.IntFlag{Name: "epic", Usage: "only children of epic `N`"},
 			&ucli.BoolFlag{Name: "closed", Usage: "show closed issues instead"},
-		),
+		},
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			app, err := buildApp(cmd)
 			if err != nil {
@@ -147,7 +148,6 @@ func showCmd() *ucli.Command {
 		Name:      "show",
 		Usage:     "issue detail: body, deps, parent, children, recent comments",
 		ArgsUsage: "<n>",
-		Flags:     globalFlags(),
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			n, err := numberArg(cmd, "issues show <n>")
 			if err != nil {
@@ -167,7 +167,6 @@ func searchCmd() *ucli.Command {
 		Name:      "search",
 		Usage:     "text search over open and closed issues — dedupe before filing",
 		ArgsUsage: "<terms>",
-		Flags:     globalFlags(),
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			app, err := buildApp(cmd)
 			if err != nil {
@@ -182,7 +181,7 @@ func createCmd() *ucli.Command {
 	return &ucli.Command{
 		Name:  "create",
 		Usage: "file a new issue within the conventions",
-		Flags: append(globalFlags(),
+		Flags: []ucli.Flag{
 			&ucli.StringFlag{Name: "title", Usage: "issue title (required)"},
 			&ucli.StringFlag{Name: "type", Usage: "bug|enhancement|task (required)"},
 			&ucli.StringFlag{Name: "priority", Usage: "P0..P4 (default P2)"},
@@ -192,7 +191,7 @@ func createCmd() *ucli.Command {
 			&ucli.IntFlag{Name: "discovered-from", Usage: "link back to issue `N` this was discovered under"},
 			&ucli.StringFlag{Name: "body-file", Usage: "read body from `FILE`"},
 			&ucli.BoolFlag{Name: "edit", Usage: "open $EDITOR seeded with the body template"},
-		),
+		},
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			app, err := buildApp(cmd)
 			if err != nil {
@@ -218,10 +217,10 @@ func startCmd() *ucli.Command {
 		Name:      "start",
 		Usage:     "claim an issue: assign @me + in-progress (refuses claimed issues, exit 3)",
 		ArgsUsage: "<n>",
-		Flags: append(globalFlags(),
+		Flags: []ucli.Flag{
 			&ucli.StringFlag{Name: "priority", Usage: "P0..P4; required when the issue is untriaged"},
 			&ucli.BoolFlag{Name: "force", Usage: "steal an already-claimed issue"},
-		),
+		},
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			n, err := numberArg(cmd, "issues start <n>")
 			if err != nil {
@@ -240,7 +239,6 @@ func triageCmd() *ucli.Command {
 	return &ucli.Command{
 		Name:  "triage",
 		Usage: "issues missing priority/type labels, oldest first",
-		Flags: globalFlags(),
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			app, err := buildApp(cmd)
 			if err != nil {
@@ -256,7 +254,7 @@ func setCmd() *ucli.Command {
 		Name:      "set",
 		Usage:     "retriage/edit within conventions (swaps labels, never stacks)",
 		ArgsUsage: "<n>",
-		Flags: append(globalFlags(),
+		Flags: []ucli.Flag{
 			&ucli.StringFlag{Name: "priority", Usage: "P0..P4"},
 			&ucli.StringFlag{Name: "type", Usage: "bug|enhancement|task"},
 			&ucli.StringSliceFlag{Name: "add-area", Usage: "add area label (repeatable)"},
@@ -264,7 +262,7 @@ func setCmd() *ucli.Command {
 			&ucli.IntFlag{Name: "parent", Usage: "move under epic `N`"},
 			&ucli.BoolFlag{Name: "no-parent", Usage: "detach from its epic"},
 			&ucli.StringFlag{Name: "title", Usage: "new title"},
-		),
+		},
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			n, err := numberArg(cmd, "issues set <n>")
 			if err != nil {
@@ -292,11 +290,11 @@ func closeCmd() *ucli.Command {
 		Name:      "close",
 		Usage:     "comment + close (not-planned unless --completed or --duplicate-of)",
 		ArgsUsage: "<n>",
-		Flags: append(globalFlags(),
+		Flags: []ucli.Flag{
 			&ucli.StringFlag{Name: "reason", Usage: "closing comment (required unless --duplicate-of)"},
 			&ucli.BoolFlag{Name: "completed", Usage: "close as completed"},
 			&ucli.IntFlag{Name: "duplicate-of", Usage: "close as duplicate of issue `N`"},
-		),
+		},
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			n, err := numberArg(cmd, "issues close <n> --reason \"...\"")
 			if err != nil {
@@ -316,9 +314,9 @@ func blockCmd() *ucli.Command {
 		Name:      "block",
 		Usage:     "add a native dependency (cycle-checked)",
 		ArgsUsage: "<n> --on <m>",
-		Flags: append(globalFlags(),
+		Flags: []ucli.Flag{
 			&ucli.IntFlag{Name: "on", Usage: "blocking issue `N` (required)", Required: true},
-		),
+		},
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			n, err := numberArg(cmd, "issues block <n> --on <m>")
 			if err != nil {
@@ -338,9 +336,9 @@ func unblockCmd() *ucli.Command {
 		Name:      "unblock",
 		Usage:     "remove a dependency",
 		ArgsUsage: "<n> --from <m>",
-		Flags: append(globalFlags(),
+		Flags: []ucli.Flag{
 			&ucli.IntFlag{Name: "from", Usage: "blocking issue `N` (required)", Required: true},
-		),
+		},
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			n, err := numberArg(cmd, "issues unblock <n> --from <m>")
 			if err != nil {
@@ -363,10 +361,10 @@ func epicCmd() *ucli.Command {
 			{
 				Name:  "create",
 				Usage: "create a parent issue and attach children",
-				Flags: append(globalFlags(),
+				Flags: []ucli.Flag{
 					&ucli.StringFlag{Name: "title", Usage: "epic title (required)"},
 					&ucli.IntSliceFlag{Name: "children", Usage: "existing issues to attach"},
-				),
+				},
 				Action: func(ctx context.Context, cmd *ucli.Command) error {
 					app, err := buildApp(cmd)
 					if err != nil {
@@ -379,7 +377,6 @@ func epicCmd() *ucli.Command {
 				Name:      "status",
 				Usage:     "progress rollup for all epics, or one epic's children",
 				ArgsUsage: "[<n>]",
-				Flags:     globalFlags(),
 				Action: func(ctx context.Context, cmd *ucli.Command) error {
 					n := 0
 					if cmd.Args().First() != "" {
@@ -414,9 +411,6 @@ func hooksApp(cmd *ucli.Command) (*appcli.App, string, error) {
 }
 
 func hooksCmd() *ucli.Command {
-	jsonFlag := []ucli.Flag{
-		&ucli.BoolFlag{Name: "json", Usage: "structured output with a stable schema"},
-	}
 	return &ucli.Command{
 		Name:  "hooks",
 		Usage: "manage the Claude Code SessionStart hook that runs `issues prime`",
@@ -424,7 +418,6 @@ func hooksCmd() *ucli.Command {
 			{
 				Name:  "install",
 				Usage: "add the hook to this project's .claude/settings.json",
-				Flags: jsonFlag,
 				Action: func(ctx context.Context, cmd *ucli.Command) error {
 					app, root, err := hooksApp(cmd)
 					if err != nil {
@@ -436,7 +429,6 @@ func hooksCmd() *ucli.Command {
 			{
 				Name:  "remove",
 				Usage: "remove the hook again",
-				Flags: jsonFlag,
 				Action: func(ctx context.Context, cmd *ucli.Command) error {
 					app, root, err := hooksApp(cmd)
 					if err != nil {
@@ -457,13 +449,13 @@ func migrateCmd() *ucli.Command {
 			{
 				Name:  "beads",
 				Usage: "migrate a beads (bd) database: labels, deps, epics, in-progress state",
-				Flags: append(globalFlags(),
+				Flags: []ucli.Flag{
 					&ucli.StringFlag{Name: "file", Usage: "beads snapshot (default: <project>/.beads/issues.jsonl)"},
 					&ucli.StringFlag{Name: "state", Usage: "resume-state `FILE` (default: alongside the snapshot)"},
 					&ucli.BoolFlag{Name: "dry-run", Usage: "print the plan without creating anything"},
 					&ucli.BoolFlag{Name: "include-closed", Usage: "also migrate closed beads (create, comment, close)"},
 					&ucli.DurationFlag{Name: "throttle", Usage: "pause between writes", Value: 500 * time.Millisecond},
-				),
+				},
 				Action: func(ctx context.Context, cmd *ucli.Command) error {
 					file := cmd.String("file")
 					if file == "" {
@@ -502,7 +494,6 @@ func initCmd() *ucli.Command {
 	return &ucli.Command{
 		Name:  "init",
 		Usage: "bootstrap convention labels; print the CLAUDE.md snippet",
-		Flags: globalFlags(),
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			app, err := buildApp(cmd)
 			if err != nil {
