@@ -1,0 +1,66 @@
+name: review-tests
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+    paths:
+      - "**/*_test.go"
+      - "internal/render/testdata/**"
+
+permissions:
+  contents: read
+  pull-requests: read
+  id-token: write
+
+concurrency:
+  group: review-tests-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review-tests:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+
+      - name: review test quality
+        uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e # v1.0.178
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Scope:
+            - Run `gh pr diff ${{ github.event.pull_request.number }} --name-only` and keep
+              only test files: `*_test.go` and files under `internal/render/testdata/`.
+              Ignore files the PR deletes.
+            - If the scope is only `internal/render/testdata/` files, add the
+              `internal/render/*_test.go` files that use them — golden data is only
+              reviewable alongside the tests that assert on it.
+            - If nothing remains in scope, stop without commenting.
+
+            Review the scoped files using the review-tests skill
+            (.claude/skills/review-tests/SKILL.md). The PR branch is already checked out in
+            the working directory, but HEAD is detached, so skip the skill's
+            discover-files.sh scoping step — the file list above is the review scope. Follow
+            the rest of the skill as written: quality criteria, severity, pattern collapsing,
+            the reporting cap, and the REFERENCE.md output format.
+
+            Focus: run `gh pr diff ${{ github.event.pull_request.number }}` and prioritize
+            findings on lines this PR adds or modifies. For pre-existing code in the scoped
+            files that this PR does not touch, report only P1 findings.
+
+            Posting: check for an earlier review comment of yours with
+            `gh pr view ${{ github.event.pull_request.number }} --comments`, then post the
+            report as a single PR comment using
+            `gh pr comment ${{ github.event.pull_request.number }} --edit-last --create-if-none`.
+            Carry forward earlier findings that still apply rather than re-deriving them,
+            drop findings the PR has since resolved, and add new ones. If there are no
+            findings, the comment is a one-line "no findings" note. This review is advisory:
+            commenting is the only output — never request changes or fail the job.
+          claude_args: |
+            --max-turns 40
+            --allowedTools "Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
