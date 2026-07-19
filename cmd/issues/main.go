@@ -39,9 +39,22 @@ func globalFlags() []ucli.Flag {
 	}
 }
 
+// repoSpec returns the value of --repo as set on cmd or any of its ancestor
+// commands, so the global flag position (`issues --repo owner/name list`) is
+// honored, not silently dropped in favor of git-remote detection. Lineage()
+// returns cmd first, then walks up to the root, so the nearest set value wins.
+func repoSpec(cmd *ucli.Command) string {
+	for _, ancestor := range cmd.Lineage() {
+		if ancestor.IsSet("repo") {
+			return ancestor.String("repo")
+		}
+	}
+	return ""
+}
+
 func buildApp(cmd *ucli.Command) (*appcli.App, error) {
 	var repo gh.Repo
-	if spec := cmd.String("repo"); spec != "" {
+	if spec := repoSpec(cmd); spec != "" {
 		parsed, err := appcli.ParseRepoSpec(spec)
 		if err != nil {
 			return nil, err

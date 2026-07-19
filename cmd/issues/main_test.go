@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -139,5 +140,78 @@ func TestPrimerFactsTrackCode(t *testing.T) {
 	}
 	if want := "default " + model.DefaultPriority.String(); !strings.Contains(primer, want) {
 		t.Errorf("primer must state the default priority as %q", want)
+	}
+}
+
+// TestRepoSpecHonorsBeforeSubcommandPosition is the regression guard for
+// issue #25: `--repo owner/name` placed BEFORE the subcommand must reach the
+// command. Previously the root-level flag was parsed but never read by the
+// subcommand, so writes silently fell back to git-remote detection.
+func TestRepoSpecHonorsBeforeSubcommandPosition(t *testing.T) {
+	flags := []ucli.Flag{
+		&ucli.StringFlag{Name: "repo"},
+	}
+	root := &ucli.Command{
+		Name:  "issues",
+		Flags: flags,
+		Commands: []*ucli.Command{
+			{
+				Name:  "list",
+				Flags: flags,
+				Action: func(_ context.Context, cmd *ucli.Command) error {
+					if got := repoSpec(cmd); got != "owner/name" {
+						t.Errorf("repoSpec = %q, want %q", got, "owner/name")
+					}
+					return nil
+				},
+			},
+		},
+	}
+
+	// Global position: issues --repo owner/name list
+	if err := root.Run(context.Background(), []string{"issues", "--repo", "owner/name", "list"}); err != nil {
+		t.Fatalf("run global-position: %v", err)
+	}
+
+	// Local position still works: issues list --repo owner/name
+	root2 := &ucli.Command{
+		Name:  "issues",
+		Flags: flags,
+		Commands: []*ucli.Command{
+			{
+				Name:  "list",
+				Flags: flags,
+				Action: func(_ context.Context, cmd *ucli.Command) error {
+					if got := repoSpec(cmd); got != "owner/name" {
+						t.Errorf("repoSpec = %q, want %q", got, "owner/name")
+					}
+					return nil
+				},
+			},
+		},
+	}
+	if err := root2.Run(context.Background(), []string{"issues", "list", "--repo", "owner/name"}); err != nil {
+		t.Fatalf("run local-position: %v", err)
+	}
+
+	// Local position wins when both are set.
+	root3 := &ucli.Command{
+		Name:  "issues",
+		Flags: flags,
+		Commands: []*ucli.Command{
+			{
+				Name:  "list",
+				Flags: flags,
+				Action: func(_ context.Context, cmd *ucli.Command) error {
+					if got := repoSpec(cmd); got != "local/name" {
+						t.Errorf("repoSpec = %q, want %q", got, "local/name")
+					}
+					return nil
+				},
+			},
+		},
+	}
+	if err := root3.Run(context.Background(), []string{"issues", "--repo", "global/name", "list", "--repo", "local/name"}); err != nil {
+		t.Fatalf("run both-position: %v", err)
 	}
 }
