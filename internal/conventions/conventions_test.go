@@ -72,11 +72,16 @@ func TestTemplateSections(t *testing.T) {
 }
 
 func TestTemplateSkeleton(t *testing.T) {
-	s := TemplateSkeleton("bug")
-	for _, h := range []string{"### Where", "### Problem", "### Fix", "### Done when", "- [ ]"} {
-		if !strings.Contains(s, h) {
-			t.Errorf("skeleton missing %q:\n%s", h, s)
-		}
+	// The skeleton is a fixed template, so assert it whole: section order,
+	// blank slots, and the checklist seeded under "Done when" are all part
+	// of the contract with --edit and StripEmptySections.
+	wantBug := "### Where\n\n### Problem\n\n### Fix\n\n### Done when\n\n- [ ] \n"
+	if got := TemplateSkeleton("bug"); got != wantBug {
+		t.Errorf("bug skeleton = %q, want %q", got, wantBug)
+	}
+	wantTask := "### Where\n\n### Goal\n\n### Approach\n\n### Done when\n\n- [ ] \n"
+	if got := TemplateSkeleton("task"); got != wantTask {
+		t.Errorf("task skeleton = %q, want %q", got, wantTask)
 	}
 }
 
@@ -126,7 +131,12 @@ func TestPrimerStaticMentionsCoreCommands(t *testing.T) {
 }
 
 func TestClaudeSnippet(t *testing.T) {
-	if !strings.Contains(ClaudeSnippet, "issues prime") {
-		t.Error("snippet must point at issues prime")
+	// Every load-bearing claim in the snippet issues init writes into user
+	// repos: where work is tracked, the session-start command, and the
+	// fallback.
+	for _, want := range []string{"GitHub Issues", "`issues` CLI", "issues prime", "issues ready"} {
+		if !strings.Contains(ClaudeSnippet, want) {
+			t.Errorf("snippet missing %q:\n%s", want, ClaudeSnippet)
+		}
 	}
 }

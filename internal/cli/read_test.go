@@ -311,6 +311,24 @@ func TestPrime(t *testing.T) {
 	}
 }
 
+func TestPrimeWarnings(t *testing.T) {
+	// A dependency cycle silently empties ready; prime is where an agent
+	// learns about it, so the warnings wiring must actually be connected.
+	a := issue(1, "A", "P2", "bug")
+	a.BlockedBy = []model.Ref{{Number: 2, State: "OPEN"}}
+	b := issue(2, "B", "P2", "bug")
+	b.BlockedBy = []model.Ref{{Number: 1, State: "OPEN"}}
+	f := newFake(a, b)
+	app, out, _ := newApp(f)
+	if err := app.Prime(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "## Warnings") || !strings.Contains(got, "dependency cycle #1 → #2 → #1") {
+		t.Errorf("Prime missing cycle warning:\n%s", got)
+	}
+}
+
 func TestPrimeCapsReady(t *testing.T) {
 	var issues []*model.Issue
 	for n := 1; n <= 15; n++ {

@@ -54,6 +54,27 @@ func TestEditSeedsInitial(t *testing.T) {
 	}
 }
 
+// TestEditExported drives the exported Edit — $EDITOR lookup and the real
+// execRun wiring — end to end. `true` exits 0 without touching the file, so
+// the seed must round-trip unchanged.
+func TestEditExported(t *testing.T) {
+	t.Setenv("EDITOR", "true")
+	got, err := Edit("seed text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "seed text" {
+		t.Errorf("content = %q, want the seed unchanged", got)
+	}
+}
+
+func TestEditExportedRequiresEditor(t *testing.T) {
+	t.Setenv("EDITOR", "")
+	if _, err := Edit("x"); err == nil || !strings.Contains(err.Error(), "$EDITOR") {
+		t.Errorf("err = %v", err)
+	}
+}
+
 func TestEditRequiresEditor(t *testing.T) {
 	_, err := edit("", nil, "x")
 	if err == nil || !strings.Contains(err.Error(), "$EDITOR") {
