@@ -35,6 +35,7 @@ The layering exists so everything with behavior is testable without hitting GitH
 | `internal/conventions/` | The opinions: label set, body template, primer text | Changing labels, the template, or the primer |
 | `internal/beads/` | Parses a beads (bd) `issues.jsonl` snapshot for `migrate` — pure parsing, no runtime dependency on bd | Changing the beads migration |
 | `docs/` | Supporting docs (primer mock) | Revising primer output |
+| `.claude/skills/review-tests/` | Vendored copy of the critique plugin's review-tests skill, run by the `review-tests` workflow as an advisory PR check; its `discover-files.sh` is shellcheck-linted in CI | Changing the CI test-quality review |
 
 | File | What | When to read |
 |---|---|---|

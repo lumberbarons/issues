@@ -1,0 +1,48 @@
+name: review-tests
+
+on:
+  pull_request:
+    paths:
+      - "**/*_test.go"
+      - "internal/render/testdata/**"
+
+permissions:
+  contents: read
+  pull-requests: read
+  id-token: write
+
+concurrency:
+  group: review-tests-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+
+      - name: review test quality
+        uses: anthropics/claude-code-action@af0559ee4f514d1ef21826982bed13f7edc3c35e # v1.0.178
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            Run `gh pr diff ${{ github.event.pull_request.number }} --name-only` to list the
+            files changed in this PR, and keep only test files: `*_test.go` and files under
+            `internal/render/testdata/`.
+
+            Review those files using the review-tests skill (.claude/skills/review-tests/SKILL.md).
+            The PR branch is already checked out in the working directory, but HEAD is detached,
+            so skip the skill's discover-files.sh scoping step — the filtered PR file list above
+            is the review scope. Follow the rest of the skill as written: quality criteria,
+            severity, pattern collapsing, the reporting cap, and the REFERENCE.md output format.
+
+            When done, post the report as a single PR comment with `gh pr comment`. This review
+            is advisory: post the findings report, or a one-line "no findings" comment if the
+            tests look good. Do not request changes or fail — commenting is the only output.
+          claude_args: |
+            --allowedTools "Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"
