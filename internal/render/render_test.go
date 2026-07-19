@@ -218,10 +218,36 @@ func TestJSONList(t *testing.T) {
 	issues[1].BlockedBy = []model.Ref{{Number: 9, State: "OPEN"}, {Number: 55, State: "CLOSED"}}
 	issues[1].Parent = &model.Ref{Number: 137, State: "OPEN"}
 	var buf bytes.Buffer
-	if err := JSONList(&buf, issues); err != nil {
+	if err := JSONList(&buf, issues, false); err != nil {
 		t.Fatal(err)
 	}
 	checkGolden(t, "list_json", buf.Bytes())
+}
+
+func TestJSONListBodies(t *testing.T) {
+	issues := fixtureIssues()
+	issues[0].Body = "### Goal\n\nDedup in one call."
+	issues[1].Body = "" // empty body still gets the field: consumers key on it
+	var buf bytes.Buffer
+	if err := JSONList(&buf, issues, true); err != nil {
+		t.Fatal(err)
+	}
+	for ln := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
+		var got map[string]any
+		if err := json.Unmarshal([]byte(ln), &got); err != nil {
+			t.Fatalf("invalid NDJSON line: %v\n%s", err, ln)
+		}
+		if _, ok := got["body"]; !ok {
+			t.Errorf("line missing body: %s", ln)
+		}
+	}
+	var first map[string]any
+	if err := json.Unmarshal([]byte(strings.SplitN(buf.String(), "\n", 2)[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first["body"] != "### Goal\n\nDedup in one call." {
+		t.Errorf("body = %q", first["body"])
+	}
 }
 
 func TestJSONIssue(t *testing.T) {

@@ -196,6 +196,60 @@ func TestListClosed(t *testing.T) {
 	}
 }
 
+func TestListBodiesJSON(t *testing.T) {
+	withBody := issue(1, "Has body", "P2", "bug")
+	withBody.Body = "### Goal\n\nDedup."
+	f := newFake(withBody, issue(2, "No body", "P1", "bug"))
+	app, out, _ := newApp(f)
+	app.JSON = true
+	if err := app.List(ctx, ListOpts{Bodies: true}); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 NDJSON lines, got %d:\n%s", len(lines), out.String())
+	}
+	bodies := map[float64]any{}
+	for _, ln := range lines {
+		var got map[string]any
+		if err := json.Unmarshal([]byte(ln), &got); err != nil {
+			t.Fatalf("invalid NDJSON line: %v\n%s", err, ln)
+		}
+		body, ok := got["body"]
+		if !ok {
+			t.Fatalf("line missing body: %s", ln)
+		}
+		bodies[got["number"].(float64)] = body
+	}
+	if bodies[1] != "### Goal\n\nDedup." || bodies[2] != "" {
+		t.Errorf("bodies = %v", bodies)
+	}
+}
+
+func TestListWithoutBodiesFlagOmitsBodies(t *testing.T) {
+	withBody := issue(1, "Has body", "P2", "bug")
+	withBody.Body = "secret payload"
+	f := newFake(withBody)
+	app, out, _ := newApp(f)
+	app.JSON = true
+	if err := app.List(ctx, ListOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(out.String())), &got); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["body"]; ok {
+		t.Errorf("body leaked without --bodies: %s", out.String())
+	}
+}
+
+func TestListBodiesRequiresJSON(t *testing.T) {
+	f := newFake(issue(1, "Work", "P2", "bug"))
+	app, _, _ := newApp(f)
+	exitCode(t, app.List(ctx, ListOpts{Bodies: true}), ExitUsage)
+}
+
 func TestListEmpty(t *testing.T) {
 	f := newFake()
 	app, out, _ := newApp(f)

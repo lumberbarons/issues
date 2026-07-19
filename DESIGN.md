@@ -101,6 +101,8 @@ issues prime                      # session-start context (see below)
 issues ready                      # open, non-epic, zero *open* blockers; sorted
                                   # P0→P4 then P?, oldest first within a priority
 issues list [--label X] [--epic N] [--closed]
+            [--bodies]           # with --json: body on every line — whole-tracker
+                                  # dedup in a single call instead of a show per candidate
 issues show <n>                   # detail: body, deps, parent, children, recent comments
 issues search <terms>             # repo-scoped text search over open+closed issues in
                                   # best-match order — the dedupe step before filing

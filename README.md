@@ -52,6 +52,7 @@ If any command exits `4`, authenticate first with `gh auth login`.
 issues prime                      # session-start context for agents
 issues ready                      # open, non-epic, zero open blockers; P0→P4 then P?
 issues list [--label X] [--epic N] [--closed]
+            [--bodies]           # with --json: body on every line, dedup in one call
 issues show <n>                   # body, deps, parent, children, recent comments
 issues search <terms>             # text search, open+closed, best-match order —
                                   # check for an existing issue before filing one
