@@ -81,8 +81,14 @@ func (a *App) progressf(format string, args ...any) {
 // emitList renders an issue collection: NDJSON under --json, otherwise the
 // given text renderer, or emptyMsg when there are none.
 func (a *App) emitList(issues []model.Issue, emptyMsg string, renderText func(io.Writer, []model.Issue)) error {
+	return a.emitListBodies(issues, emptyMsg, renderText, false)
+}
+
+// emitListBodies is emitList with the body carried on every NDJSON line
+// (list --bodies); text output is unaffected.
+func (a *App) emitListBodies(issues []model.Issue, emptyMsg string, renderText func(io.Writer, []model.Issue), withBodies bool) error {
 	if a.JSON {
-		return render.JSONList(a.Out, issues)
+		return render.JSONList(a.Out, issues, withBodies)
 	}
 	if len(issues) == 0 {
 		a.printf("%s\n", emptyMsg)

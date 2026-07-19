@@ -41,10 +41,16 @@ type ListOpts struct {
 	Label  string
 	Epic   int
 	Closed bool
+	// Bodies carries each issue's body on the NDJSON lines — whole-tracker
+	// dedup in one call. JSON-only: text output has no place for bodies.
+	Bodies bool
 }
 
 // List shows issues, open by default, filtered by label or epic membership.
 func (a *App) List(ctx context.Context, opts ListOpts) error {
+	if opts.Bodies && !a.JSON {
+		return usageErr("--bodies requires --json")
+	}
 	states := openStates
 	if opts.Closed {
 		states = []gh.IssueState{gh.StateClosed}
@@ -72,7 +78,7 @@ func (a *App) List(ctx context.Context, opts ListOpts) error {
 		out = append(out, i)
 	}
 	model.SortForList(out)
-	return a.emitList(out, "no issues", render.List)
+	return a.emitListBodies(out, "no issues", render.List, opts.Bodies)
 }
 
 // Show prints one issue in full: body, deps, parent, children, comments.

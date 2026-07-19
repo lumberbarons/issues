@@ -128,6 +128,7 @@ func listCmd() *ucli.Command {
 			&ucli.StringFlag{Name: "label", Usage: "only issues with this label"},
 			&ucli.IntFlag{Name: "epic", Usage: "only children of epic `N`"},
 			&ucli.BoolFlag{Name: "closed", Usage: "show closed issues instead"},
+			&ucli.BoolFlag{Name: "bodies", Usage: "include issue bodies (requires --json) for single-call dedup"},
 		},
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			app, err := buildApp(cmd)
@@ -138,6 +139,7 @@ func listCmd() *ucli.Command {
 				Label:  cmd.String("label"),
 				Epic:   cmd.Int("epic"),
 				Closed: cmd.Bool("closed"),
+				Bodies: cmd.Bool("bodies"),
 			})
 		},
 	}

@@ -51,7 +51,7 @@ const (
 type Client interface {
 	// Viewer returns the authenticated user's login.
 	Viewer(ctx context.Context) (string, error)
-	// ListIssues fetches all issues in the given states with labels,
+	// ListIssues fetches all issues in the given states with body, labels,
 	// assignees, parent, sub-issues, and blockers, paginating the outer
 	// connection. Nested connections are capped (see query).
 	ListIssues(ctx context.Context, states []IssueState) ([]model.Issue, error)

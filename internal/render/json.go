@@ -30,8 +30,11 @@ type IssueJSON struct {
 	SubIssuesTotal     int           `json:"subIssuesTotal"`
 	SubIssuesCompleted int           `json:"subIssuesCompleted"`
 	CreatedAt          time.Time     `json:"createdAt"`
-	Body               string        `json:"body,omitempty"`
-	Comments           []CommentJSON `json:"comments,omitempty"`
+	// Body is a pointer so presence tracks the mode (show, list --bodies)
+	// rather than emptiness: modes that carry it emit the field on every
+	// issue, empty or not, and plain list lines stay byte-for-byte body-free.
+	Body     *string       `json:"body,omitempty"`
+	Comments []CommentJSON `json:"comments,omitempty"`
 	CommentsTotal      int           `json:"commentsTotal,omitempty"`
 }
 
@@ -74,7 +77,7 @@ func ToJSON(i model.Issue, withDetail bool) IssueJSON {
 		out.Parent = &n
 	}
 	if withDetail {
-		out.Body = i.Body
+		out.Body = &i.Body
 		out.CommentsTotal = i.CommentsTotal
 		for _, c := range i.Comments {
 			out.Comments = append(out.Comments, CommentJSON{Author: c.Author, CreatedAt: c.CreatedAt, Body: c.Body})
@@ -85,11 +88,17 @@ func ToJSON(i model.Issue, withDetail bool) IssueJSON {
 
 // JSONList writes issues as NDJSON — one compact object per line. Unlike
 // an array, it stays parseable under head/grep and agent output
-// truncation, which is how list output actually gets consumed.
-func JSONList(w io.Writer, issues []model.Issue) error {
+// truncation, which is how list output actually gets consumed. withBodies
+// carries each issue's body (list --bodies), turning whole-tracker dedup
+// into a single call instead of a show per candidate.
+func JSONList(w io.Writer, issues []model.Issue, withBodies bool) error {
 	enc := json.NewEncoder(w)
 	for _, i := range issues {
-		if err := enc.Encode(ToJSON(i, false)); err != nil {
+		out := ToJSON(i, false)
+		if withBodies {
+			out.Body = &i.Body
+		}
+		if err := enc.Encode(out); err != nil {
 			return err
 		}
 	}

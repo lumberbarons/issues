@@ -218,10 +218,40 @@ func TestJSONList(t *testing.T) {
 	issues[1].BlockedBy = []model.Ref{{Number: 9, State: "OPEN"}, {Number: 55, State: "CLOSED"}}
 	issues[1].Parent = &model.Ref{Number: 137, State: "OPEN"}
 	var buf bytes.Buffer
-	if err := JSONList(&buf, issues); err != nil {
+	if err := JSONList(&buf, issues, false); err != nil {
 		t.Fatal(err)
 	}
 	checkGolden(t, "list_json", buf.Bytes())
+}
+
+func TestJSONListBodies(t *testing.T) {
+	issues := fixtureIssues()
+	issues[0].Body = "### Goal\n\nDedup in one call."
+	issues[1].Body = "" // empty body still gets the field: consumers key on it
+	var buf bytes.Buffer
+	if err := JSONList(&buf, issues, true); err != nil {
+		t.Fatal(err)
+	}
+	bodies := map[float64]any{}
+	for ln := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
+		var got map[string]any
+		if err := json.Unmarshal([]byte(ln), &got); err != nil {
+			t.Fatalf("invalid NDJSON line: %v\n%s", err, ln)
+		}
+		body, ok := got["body"]
+		if !ok {
+			t.Fatalf("line missing body: %s", ln)
+		}
+		bodies[got["number"].(float64)] = body
+	}
+	if len(bodies) != len(issues) {
+		t.Fatalf("bodies on %d of %d lines", len(bodies), len(issues))
+	}
+	// Exact values, not just key presence: an empty body must arrive as ""
+	// — null or a dropped field would break consumers keying on it.
+	if bodies[120] != "### Goal\n\nDedup in one call." || bodies[117] != "" {
+		t.Errorf("bodies = %#v", bodies)
+	}
 }
 
 func TestJSONIssue(t *testing.T) {

@@ -70,9 +70,11 @@ func (g *GitHub) Viewer(ctx context.Context) (string, error) {
 	return resp.Viewer.Login, nil
 }
 
-// issueFields is the shared GraphQL selection for both list and get.
+// issueFields is the shared GraphQL selection for both list and get. Body
+// rides along everywhere: it's a scalar, so it adds no rate-limit cost, and
+// list --bodies needs it without a second query per issue.
 var issueFields = fmt.Sprintf(`
-	id number title state stateReason createdAt
+	id number title state stateReason createdAt body
 	labels(first: %d) { nodes { name } }
 	assignees(first: %d) { nodes { login } }
 	parent { number state title }
@@ -223,7 +225,6 @@ func (g *GitHub) GetIssue(ctx context.Context, number int) (model.Issue, error) 
 	query($owner: String!, $name: String!, $number: Int!) {
 		repository(owner: $owner, name: $name) {
 			issue(number: $number) {%s
-				body
 				comments(last: %d) { totalCount nodes { author { login } createdAt body } }
 			}
 		}
