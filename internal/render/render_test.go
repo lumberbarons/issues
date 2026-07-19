@@ -232,21 +232,25 @@ func TestJSONListBodies(t *testing.T) {
 	if err := JSONList(&buf, issues, true); err != nil {
 		t.Fatal(err)
 	}
+	bodies := map[float64]any{}
 	for ln := range strings.SplitSeq(strings.TrimSpace(buf.String()), "\n") {
 		var got map[string]any
 		if err := json.Unmarshal([]byte(ln), &got); err != nil {
 			t.Fatalf("invalid NDJSON line: %v\n%s", err, ln)
 		}
-		if _, ok := got["body"]; !ok {
-			t.Errorf("line missing body: %s", ln)
+		body, ok := got["body"]
+		if !ok {
+			t.Fatalf("line missing body: %s", ln)
 		}
+		bodies[got["number"].(float64)] = body
 	}
-	var first map[string]any
-	if err := json.Unmarshal([]byte(strings.SplitN(buf.String(), "\n", 2)[0]), &first); err != nil {
-		t.Fatal(err)
+	if len(bodies) != len(issues) {
+		t.Fatalf("bodies on %d of %d lines", len(bodies), len(issues))
 	}
-	if first["body"] != "### Goal\n\nDedup in one call." {
-		t.Errorf("body = %q", first["body"])
+	// Exact values, not just key presence: an empty body must arrive as ""
+	// — null or a dropped field would break consumers keying on it.
+	if bodies[120] != "### Goal\n\nDedup in one call." || bodies[117] != "" {
+		t.Errorf("bodies = %#v", bodies)
 	}
 }
 
