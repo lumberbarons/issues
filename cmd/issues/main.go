@@ -15,6 +15,7 @@ import (
 	ucli "github.com/urfave/cli/v3"
 
 	appcli "github.com/lumberbarons/issues/internal/cli"
+	"github.com/lumberbarons/issues/internal/conventions"
 	"github.com/lumberbarons/issues/internal/editor"
 	"github.com/lumberbarons/issues/internal/gh"
 
@@ -179,11 +180,38 @@ func searchCmd() *ucli.Command {
 	}
 }
 
+// bodyFlags are the body paths shared by create and epic create: section
+// flags compose the template; --body-file and --edit are the long-form
+// escape hatches.
+func bodyFlags() []ucli.Flag {
+	return []ucli.Flag{
+		&ucli.StringFlag{Name: "where", Usage: "body section: where the work lives"},
+		&ucli.StringFlag{Name: "problem", Usage: "body section: the problem (or use --goal)"},
+		&ucli.StringFlag{Name: "goal", Usage: "body section: the goal (or use --problem)"},
+		&ucli.StringFlag{Name: "fix", Usage: "body section: the fix (or use --approach)"},
+		&ucli.StringFlag{Name: "approach", Usage: "body section: the approach (or use --fix)"},
+		&ucli.StringSliceFlag{Name: "done-when", Usage: "acceptance checklist item (repeatable)"},
+		&ucli.StringFlag{Name: "body-file", Usage: "read the whole body from `FILE` (for long-form bodies)"},
+		&ucli.BoolFlag{Name: "edit", Usage: "open $EDITOR seeded with the body template"},
+	}
+}
+
+func sectionsFromFlags(cmd *ucli.Command) conventions.Sections {
+	return conventions.Sections{
+		Where:    cmd.String("where"),
+		Problem:  cmd.String("problem"),
+		Goal:     cmd.String("goal"),
+		Fix:      cmd.String("fix"),
+		Approach: cmd.String("approach"),
+		DoneWhen: cmd.StringSlice("done-when"),
+	}
+}
+
 func createCmd() *ucli.Command {
 	return &ucli.Command{
 		Name:  "create",
 		Usage: "file a new issue within the conventions",
-		Flags: []ucli.Flag{
+		Flags: append([]ucli.Flag{
 			&ucli.StringFlag{Name: "title", Usage: "issue title (required)"},
 			&ucli.StringFlag{Name: "type", Usage: "bug|enhancement|task (required)"},
 			&ucli.StringFlag{Name: "priority", Usage: "P0..P4 (default P2)"},
@@ -191,9 +219,7 @@ func createCmd() *ucli.Command {
 			&ucli.IntSliceFlag{Name: "blocked-by", Usage: "blocking issue `N` (repeatable)"},
 			&ucli.IntFlag{Name: "parent", Usage: "attach as sub-issue of epic `N`"},
 			&ucli.IntFlag{Name: "discovered-from", Usage: "link back to issue `N` this was discovered under"},
-			&ucli.StringFlag{Name: "body-file", Usage: "read body from `FILE`"},
-			&ucli.BoolFlag{Name: "edit", Usage: "open $EDITOR seeded with the body template"},
-		},
+		}, bodyFlags()...),
 		Action: func(ctx context.Context, cmd *ucli.Command) error {
 			app, err := buildApp(cmd)
 			if err != nil {
@@ -207,6 +233,7 @@ func createCmd() *ucli.Command {
 				BlockedBy:      cmd.IntSlice("blocked-by"),
 				Parent:         cmd.Int("parent"),
 				DiscoveredFrom: cmd.Int("discovered-from"),
+				Sections:       sectionsFromFlags(cmd),
 				BodyFile:       cmd.String("body-file"),
 				Edit:           cmd.Bool("edit"),
 			})
@@ -363,16 +390,22 @@ func epicCmd() *ucli.Command {
 			{
 				Name:  "create",
 				Usage: "create a parent issue and attach children",
-				Flags: []ucli.Flag{
+				Flags: append([]ucli.Flag{
 					&ucli.StringFlag{Name: "title", Usage: "epic title (required)"},
 					&ucli.IntSliceFlag{Name: "children", Usage: "existing issues to attach"},
-				},
+				}, bodyFlags()...),
 				Action: func(ctx context.Context, cmd *ucli.Command) error {
 					app, err := buildApp(cmd)
 					if err != nil {
 						return err
 					}
-					return app.EpicCreate(ctx, cmd.String("title"), cmd.IntSlice("children"))
+					return app.EpicCreate(ctx, appcli.EpicCreateOpts{
+						Title:    cmd.String("title"),
+						Children: cmd.IntSlice("children"),
+						Sections: sectionsFromFlags(cmd),
+						BodyFile: cmd.String("body-file"),
+						Edit:     cmd.Bool("edit"),
+					})
 				},
 			},
 			{
@@ -450,15 +483,18 @@ func applyCmd() *ucli.Command {
 		ArgsUsage: "<plan.jsonl>",
 		Description: `One JSON object per line, each an issue to create:
 
-   {"id":"epic1","title":"Voltgo support","type":"epic","priority":"P1","body":"..."}
-   {"id":"scaffold","title":"Scaffold the driver","type":"task","parent":"epic1"}
+   {"id":"epic1","title":"Voltgo support","type":"epic","priority":"P1","goal":"..."}
+   {"id":"scaffold","title":"Scaffold the driver","type":"task","parent":"epic1","done-when":["driver builds"]}
    {"title":"Collector","type":"task","parent":"epic1","blocked-by":["scaffold",42],"areas":["ble"]}
 
 Fields: title (required), type bug|enhancement|task|epic (required; epic means
 a parent issue — no type label, "Epic: " title prefix), priority P0..P4
-(default P2), areas, body, parent, blocked-by, discovered-from, id. parent and
-blocked-by take a local id (string) or an existing issue number. Creation is
-checkpointed after every write, so a failed run resumes without duplicates;
+(default P2), areas, parent, blocked-by, discovered-from, id. parent and
+blocked-by take a local id (string) or an existing issue number. Bodies come
+from the section fields — where, problem or goal, fix or approach, done-when
+(a list, one checklist item each) — composed into the body template; body
+holds raw long-form text instead (mutually exclusive with sections). Creation
+is checkpointed after every write, so a failed run resumes without duplicates;
 dependency cycles between entries are rejected before anything is written.`,
 		Flags: append(globalFlags(),
 			&ucli.StringFlag{Name: "state", Usage: "resume-state `FILE` (default: <plan>.state.json)"},

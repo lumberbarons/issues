@@ -57,8 +57,11 @@ issues show <n>                   # body, deps, parent, children, recent comment
 issues search <terms>             # text search, open+closed, best-match order —
                                   # check for an existing issue before filing one
 issues create --type bug|enhancement|task --title "..."
+              [--where X] [--problem|--goal "..."] [--fix|--approach "..."]
+              [--done-when "..."]...   # section flags compose the body template
               [--priority P0..P4] [--area X] [--blocked-by N] [--parent N]
-              [--discovered-from N] [--body-file F | --edit]  # --edit opens $EDITOR
+              [--discovered-from N]
+              [--body-file F | --edit] # long-form escape hatch / $EDITOR
 issues start <n> [--priority P0..P4] [--force]
 issues triage                     # issues missing priority/type labels
 issues set <n> [--priority ..] [--type ..] [--add-area X] [--remove-area X]
@@ -67,6 +70,7 @@ issues close <n> --reason "..." [--completed | --duplicate-of M]
 issues block <n> --on <m>         # native dependency, cycle-checked
 issues unblock <n> --from <m>
 issues epic create --title "..." [--children N,N]
+                   [--goal "..." --done-when "..." | --body-file F | --edit]
 issues epic status [<n>]
 issues apply <plan.jsonl> [--dry-run] [--state F] [--throttle D]
                                  # batch-create a whole set of issues from a JSONL
@@ -97,8 +101,8 @@ epics and tasks, filing a batch of review findings — into: write a plan,
 dry-run it, apply it. One JSON object per line:
 
 ```jsonl
-{"id":"epic1","title":"Voltgo support","type":"epic","priority":"P1","body":"### Goal\n..."}
-{"id":"scaffold","title":"Scaffold the driver","type":"task","parent":"epic1"}
+{"id":"epic1","title":"Voltgo support","type":"epic","priority":"P1","goal":"..."}
+{"id":"scaffold","title":"Scaffold the driver","type":"task","parent":"epic1","done-when":["driver builds"]}
 {"title":"Wire the collector","type":"task","parent":"epic1","blocked-by":["scaffold",42],"areas":["ble"]}
 ```
 
@@ -107,7 +111,10 @@ dry-run it, apply it. One JSON object per line:
 take either a local `id` — a string, resolved to the created issue's number,
 so entries can reference each other before numbers exist — or an existing
 issue number. `discovered-from` adds the same origin link the create flag
-does. Creation is checkpointed to the `--state` file after every write, so a
+does. Bodies come from the same section fields the create flags use —
+`where`, `problem` or `goal`, `fix` or `approach`, `done-when` (a list, one
+checklist item each) — composed into the body template; `body` carries raw
+long-form text instead (mutually exclusive with the section fields). Creation is checkpointed to the `--state` file after every write, so a
 failed run resumes without creating duplicates; unknown fields, dangling
 references, and dependency cycles between entries are all rejected before
 anything is written.

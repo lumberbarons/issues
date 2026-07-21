@@ -59,7 +59,12 @@ never hidden, never auto-"repaired". `prime` *teaches* the conventions.
 - **Discovered work** links back: `Discovered while working on #123` in the body,
   via `--discovered-from 123`.
 - **Body template**: `### Where` / `### Problem`|`### Goal` / `### Fix`|`### Approach` /
-  `### Done when` (checklist). Scaffolded by `create`, sections omitted when empty.
+  `### Done when` (checklist). Composed structurally by the create section flags
+  (`--where`, `--problem`|`--goal`, `--fix`|`--approach`, repeatable `--done-when`) —
+  headings, order, checklist formatting, and empty-section omission are write-path
+  guarantees, not taught conventions. `--body-file` is the escape hatch for
+  long-form bodies with code blocks. Wording pairs pick one flag; word choice is
+  never policed against the type.
 - **Workflow**: `ready` → `start` → branch (`feat/`|`fix/`|`chore/`) → PR with
   `Fixes #n`. Closing via PR is the norm; `close` is for wontfix/duplicate.
 - **Claiming is guarded**: `start` refuses an issue that is already assigned or
@@ -112,7 +117,9 @@ issues search <terms>             # repo-scoped text search over open+closed iss
 
 issues create --type bug|enhancement|task [--priority P0..P4] [--area X]
               [--blocked-by N...] [--parent N] [--discovered-from N]
-              --title "..." [--body-file F | --edit]
+              --title "..." [--where X] [--problem|--goal "..."]
+              [--fix|--approach "..."] [--done-when "..."]...
+              [--body-file F | --edit]
 issues start <n> [--priority P0..P4] [--force]
                                   # guarded claim: refuses if already assigned or
                                   # in-progress (distinct exit code — pick the next
@@ -129,10 +136,12 @@ issues close <n> --reason "..."   # comment + close (not-planned unless --comple
 issues block <n> --on <m>         # add dependency (cycle-checked)
 issues unblock <n> --from <m>
 issues epic create --title "..." [--children N,N,N]
+                   [section flags | --body-file F | --edit]
 issues epic status [<n>]          # progress rollup per epic
 issues apply <plan.jsonl>         # batch-create from a JSONL plan: one entry per line
-                                  # (title/type/priority/areas/body, parent and
-                                  # blocked-by), the migrate machinery generalized.
+                                  # (title/type/priority/areas, the same section
+                                  # fields as the create flags or a raw body, parent
+                                  # and blocked-by), the migrate machinery generalized.
                                   # Entries carry a local id so later entries can
                                   # reference earlier ones before numbers exist, the
                                   # way migrate resolves bead IDs; "type":"epic" makes

@@ -115,6 +115,51 @@ func TestStripEmptySectionsPreservesNonTemplate(t *testing.T) {
 	_ = in
 }
 
+func TestSectionsCompose(t *testing.T) {
+	// The composed body is the write-path template guarantee, so assert it
+	// whole: header order, blank-line separation, and the checklist shape.
+	got := Sections{
+		Where:    "internal/cli",
+		Goal:     "Ship it",
+		Approach: "Carefully",
+		DoneWhen: []string{"tests pass", "docs updated"},
+	}.Compose()
+	want := "### Where\n\ninternal/cli\n\n### Goal\n\nShip it\n\n### Approach\n\nCarefully\n\n### Done when\n\n- [ ] tests pass\n- [ ] docs updated"
+	if got != want {
+		t.Errorf("composed = %q, want %q", got, want)
+	}
+}
+
+func TestSectionsComposeBugWording(t *testing.T) {
+	got := Sections{Problem: "It breaks", Fix: "Stop it"}.Compose()
+	want := "### Problem\n\nIt breaks\n\n### Fix\n\nStop it"
+	if got != want {
+		t.Errorf("composed = %q, want %q", got, want)
+	}
+}
+
+func TestSectionsComposeOmitsEmpty(t *testing.T) {
+	got := Sections{Where: "  ", DoneWhen: []string{"just this"}}.Compose()
+	want := "### Done when\n\n- [ ] just this"
+	if got != want {
+		t.Errorf("composed = %q, want %q", got, want)
+	}
+}
+
+func TestSectionsIsZero(t *testing.T) {
+	if !(Sections{}).IsZero() {
+		t.Error("zero Sections not IsZero")
+	}
+	for _, s := range []Sections{
+		{Where: "w"}, {Problem: "p"}, {Goal: "g"}, {Fix: "f"},
+		{Approach: "a"}, {DoneWhen: []string{"d"}},
+	} {
+		if s.IsZero() {
+			t.Errorf("%+v reported IsZero", s)
+		}
+	}
+}
+
 func TestDiscoveredFrom(t *testing.T) {
 	if got := DiscoveredFrom(123); got != "Discovered while working on #123" {
 		t.Errorf("DiscoveredFrom = %q", got)
@@ -123,7 +168,8 @@ func TestDiscoveredFrom(t *testing.T) {
 
 func TestPrimerStaticMentionsCoreCommands(t *testing.T) {
 	for _, cmd := range []string{"issues ready", "start", "triage", "issues search", "--discovered-from", "Fixes #n", "P0", "P4", "exit 3",
-		"### Where", "### Done when", "Area labels sparingly", "No title prefixes"} {
+		"### Where", "### Done when", "Area labels sparingly", "No title prefixes",
+		"--goal|--problem", "--approach|--fix", "--done-when", "--body-file F for long bodies"} {
 		if !strings.Contains(PrimerStatic, cmd) {
 			t.Errorf("primer missing %q", cmd)
 		}

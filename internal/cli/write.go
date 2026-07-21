@@ -22,6 +22,7 @@ type CreateOpts struct {
 	BlockedBy      []int
 	Parent         int
 	DiscoveredFrom int
+	Sections       conventions.Sections
 	BodyFile       string
 	Edit           bool
 }
@@ -44,14 +45,18 @@ func (a *App) Create(ctx context.Context, opts CreateOpts) error {
 		}
 		priority = p
 	}
-	if opts.BodyFile != "" && opts.Edit {
-		return usageErr("--body-file and --edit are mutually exclusive")
+	if err := validateBodySource(opts.Sections, opts.BodyFile, opts.Edit); err != nil {
+		return err
 	}
 	if err := validateAreas("--area", opts.Areas); err != nil {
 		return err
 	}
 
-	body, err := a.composeBody(opts)
+	body, err := a.composeBody(bodySource{
+		issueType: opts.Type, sections: opts.Sections,
+		bodyFile: opts.BodyFile, edit: opts.Edit,
+		discoveredFrom: opts.DiscoveredFrom,
+	})
 	if err != nil {
 		return err
 	}
@@ -76,27 +81,64 @@ func (a *App) Create(ctx context.Context, opts CreateOpts) error {
 	return a.reportMutation(ctx, created.Number, "created #%d: %s\n", created.Number, opts.Title)
 }
 
-func (a *App) composeBody(opts CreateOpts) (string, error) {
+// validateBodySource enforces the body paths' exclusivity: section flags
+// compose the template, --body-file supplies long-form text, --edit opens
+// the editor — one at a time. Within the section flags, --problem/--goal
+// and --fix/--approach are wording pairs: pick the one that fits; word
+// choice is never checked against --type.
+func validateBodySource(s conventions.Sections, bodyFile string, edit bool) error {
+	if s.Problem != "" && s.Goal != "" {
+		return usageErr("--problem and --goal are mutually exclusive; pick one wording")
+	}
+	if s.Fix != "" && s.Approach != "" {
+		return usageErr("--fix and --approach are mutually exclusive; pick one wording")
+	}
+	for _, item := range s.DoneWhen {
+		if strings.TrimSpace(item) == "" {
+			return usageErr("--done-when items cannot be empty")
+		}
+	}
+	if bodyFile != "" && edit {
+		return usageErr("--body-file and --edit are mutually exclusive")
+	}
+	if !s.IsZero() && (bodyFile != "" || edit) {
+		return usageErr("section flags (--where/--problem/--goal/--fix/--approach/--done-when) and --body-file/--edit are mutually exclusive")
+	}
+	return nil
+}
+
+// bodySource is the body input shared by create and epic create.
+type bodySource struct {
+	issueType      string // seeds the --edit skeleton; empty means goal/approach wording
+	sections       conventions.Sections
+	bodyFile       string
+	edit           bool
+	discoveredFrom int
+}
+
+func (a *App) composeBody(src bodySource) (string, error) {
 	body := ""
 	switch {
-	case opts.BodyFile != "":
-		b, err := os.ReadFile(opts.BodyFile)
+	case !src.sections.IsZero():
+		body = src.sections.Compose()
+	case src.bodyFile != "":
+		b, err := os.ReadFile(src.bodyFile)
 		if err != nil {
 			return "", genericErr("cannot read --body-file: %v", err)
 		}
 		body = string(b)
-	case opts.Edit:
+	case src.edit:
 		if a.Edit == nil {
 			return "", genericErr("--edit is not available here")
 		}
-		edited, err := a.Edit(conventions.TemplateSkeleton(opts.Type))
+		edited, err := a.Edit(conventions.TemplateSkeleton(src.issueType))
 		if err != nil {
 			return "", genericErr("editor failed: %v", err)
 		}
 		body = conventions.StripEmptySections(edited)
 	}
-	if opts.DiscoveredFrom > 0 {
-		link := conventions.DiscoveredFrom(opts.DiscoveredFrom)
+	if src.discoveredFrom > 0 {
+		link := conventions.DiscoveredFrom(src.discoveredFrom)
 		if body == "" {
 			body = link
 		} else {
@@ -403,26 +445,46 @@ func (a *App) Unblock(ctx context.Context, number, blocker int) error {
 	return a.reportMutation(ctx, number, "unblocked #%d from #%d\n", number, blocker)
 }
 
+// EpicCreateOpts are the epic create inputs. The body paths match create:
+// section flags, --body-file, or --edit.
+type EpicCreateOpts struct {
+	Title    string
+	Children []int
+	Sections conventions.Sections
+	BodyFile string
+	Edit     bool
+}
+
 // EpicCreate files a parent issue and attaches existing children. Epics
 // get the cosmetic title prefix and a priority label but no type — they
 // are containers, not work.
-func (a *App) EpicCreate(ctx context.Context, title string, children []int) error {
-	if title == "" {
+func (a *App) EpicCreate(ctx context.Context, opts EpicCreateOpts) error {
+	if opts.Title == "" {
 		return usageErr("--title is required")
 	}
+	if err := validateBodySource(opts.Sections, opts.BodyFile, opts.Edit); err != nil {
+		return err
+	}
+	title := opts.Title
 	if !strings.HasPrefix(title, conventions.EpicTitlePrefix) {
 		title = conventions.EpicTitlePrefix + title
 	}
-	created, err := a.Client.CreateIssue(ctx, title, "", []string{model.DefaultPriority.String()})
+	body, err := a.composeBody(bodySource{
+		sections: opts.Sections, bodyFile: opts.BodyFile, edit: opts.Edit,
+	})
 	if err != nil {
 		return err
 	}
-	for _, child := range children {
+	created, err := a.Client.CreateIssue(ctx, title, body, []string{model.DefaultPriority.String()})
+	if err != nil {
+		return err
+	}
+	for _, child := range opts.Children {
 		if err := a.Client.AddSubIssue(ctx, created.Number, child, false); err != nil {
 			return fmt.Errorf("created epic #%d but attaching #%d failed: %w", created.Number, child, err)
 		}
 	}
-	return a.reportMutation(ctx, created.Number, "created epic #%d: %s (%d children)\n", created.Number, title, len(children))
+	return a.reportMutation(ctx, created.Number, "created epic #%d: %s (%d children)\n", created.Number, title, len(opts.Children))
 }
 
 // Init bootstraps the convention labels in the repo and prints the
