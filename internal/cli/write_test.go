@@ -152,20 +152,36 @@ func TestCreateSectionsWithDiscoveredFrom(t *testing.T) {
 	}
 }
 
+// usageError asserts a usage refusal carrying the given message fragment,
+// so a rule firing the wrong branch's message can't pass as the right one.
+func usageError(t *testing.T, err error, wantMsg string) {
+	t.Helper()
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected ExitError, got %v", err)
+	}
+	if exitErr.Code != ExitUsage {
+		t.Errorf("exit code = %d (%s), want %d", exitErr.Code, exitErr.Message, ExitUsage)
+	}
+	if !strings.Contains(exitErr.Message, wantMsg) {
+		t.Errorf("message = %q, want substring %q", exitErr.Message, wantMsg)
+	}
+}
+
 func TestCreateSectionValidation(t *testing.T) {
 	f := newFake()
 	app, _, _ := newApp(f)
 	sections := conventions.Sections{Goal: "G"}
-	exitCode(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
-		Sections: conventions.Sections{Problem: "P", Goal: "G"}}), ExitUsage)
-	exitCode(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
-		Sections: conventions.Sections{Fix: "F", Approach: "A"}}), ExitUsage)
-	exitCode(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
-		Sections: sections, BodyFile: "f"}), ExitUsage)
-	exitCode(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
-		Sections: sections, Edit: true}), ExitUsage)
-	exitCode(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
-		Sections: conventions.Sections{DoneWhen: []string{" "}}}), ExitUsage)
+	usageError(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
+		Sections: conventions.Sections{Problem: "P", Goal: "G"}}), "--problem and --goal are mutually exclusive")
+	usageError(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
+		Sections: conventions.Sections{Fix: "F", Approach: "A"}}), "--fix and --approach are mutually exclusive")
+	usageError(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
+		Sections: sections, BodyFile: "f"}), "section flags")
+	usageError(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
+		Sections: sections, Edit: true}), "section flags")
+	usageError(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
+		Sections: conventions.Sections{DoneWhen: []string{" "}}}), "--done-when items cannot be empty")
 	if len(f.calls) != 0 {
 		t.Errorf("refused creates still called the API: %v", f.calls)
 	}
@@ -697,12 +713,12 @@ func TestEpicCreateEdit(t *testing.T) {
 func TestEpicCreateSectionValidation(t *testing.T) {
 	f := newFake()
 	app, _, _ := newApp(f)
-	exitCode(t, app.EpicCreate(ctx, EpicCreateOpts{Title: "Big",
-		Sections: conventions.Sections{Goal: "G"}, BodyFile: "f"}), ExitUsage)
-	exitCode(t, app.EpicCreate(ctx, EpicCreateOpts{Title: "Big",
-		Sections: conventions.Sections{Problem: "P", Goal: "G"}}), ExitUsage)
-	exitCode(t, app.EpicCreate(ctx, EpicCreateOpts{Title: "Big",
-		BodyFile: "f", Edit: true}), ExitUsage)
+	usageError(t, app.EpicCreate(ctx, EpicCreateOpts{Title: "Big",
+		Sections: conventions.Sections{Goal: "G"}, BodyFile: "f"}), "section flags")
+	usageError(t, app.EpicCreate(ctx, EpicCreateOpts{Title: "Big",
+		Sections: conventions.Sections{Problem: "P", Goal: "G"}}), "--problem and --goal are mutually exclusive")
+	usageError(t, app.EpicCreate(ctx, EpicCreateOpts{Title: "Big",
+		BodyFile: "f", Edit: true}), "--body-file and --edit are mutually exclusive")
 	if len(f.calls) != 0 {
 		t.Errorf("refused epic creates still called the API: %v", f.calls)
 	}
