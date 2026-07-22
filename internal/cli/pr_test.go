@@ -30,6 +30,13 @@ func claimed(n int, title string, labels ...string) *model.Issue {
 	return i
 }
 
+// subIssueOf hangs an issue off an epic, the state that earns a PR its
+// "Part of #n" trailer.
+func subIssueOf(i *model.Issue, epic int) *model.Issue {
+	i.Parent = &model.Ref{Number: epic, State: "OPEN"}
+	return i
+}
+
 // createdPR returns the recorded CreatePullRequest call, failing when the
 // command never got that far.
 func createdPR(t *testing.T, f *fakeClient) string {
@@ -130,8 +137,7 @@ func TestPRFlagsOverrideTheIssueSections(t *testing.T) {
 // A sub-issue's PR names the epic it belongs to; a standalone issue's does
 // not invent one.
 func TestPRLinksTheEpic(t *testing.T) {
-	child := claimed(30, "child")
-	child.Parent = &model.Ref{Number: 33, State: "OPEN"}
+	child := subIssueOf(claimed(30, "child"), 33)
 	epic := issue(33, "Epic: the tree")
 	epic.SubIssues = []model.Ref{{Number: 30, State: "OPEN"}}
 	f := newFake(child, epic)
@@ -431,6 +437,38 @@ func TestPRBodyFileKeepsAnExistingFixes(t *testing.T) {
 	}
 	if !strings.Contains(body, "Closes #30") {
 		t.Errorf("the existing link was dropped: %q", body)
+	}
+}
+
+// The escape hatch appends every link the template would have written, not
+// just the closing one: a sub-issue's hand-written body still names its
+// epic.
+func TestPRBodyFileAppendsTheEpicTrailer(t *testing.T) {
+	path := writeTemp(t, "long-form body\n")
+	f := newFake(subIssueOf(claimed(30, "one"), 33))
+	app, _, _ := newApp(f)
+	onBranch(app, "feat/x")
+
+	if err := app.PR(context.Background(), PROpts{BodyFile: path}); err != nil {
+		t.Fatal(err)
+	}
+	if body := prBody(t, createdPR(t, f)); body != "long-form body\n\nFixes #30\nPart of #33" {
+		t.Errorf("body = %q", body)
+	}
+}
+
+// Links the author already wrote are never duplicated, on either trailer.
+func TestPRBodyFileKeepsExistingTrailers(t *testing.T) {
+	path := writeTemp(t, "narrative\n\nCloses #30\nPart of #33\n")
+	f := newFake(subIssueOf(claimed(30, "one"), 33))
+	app, _, _ := newApp(f)
+	onBranch(app, "feat/x")
+
+	if err := app.PR(context.Background(), PROpts{BodyFile: path}); err != nil {
+		t.Fatal(err)
+	}
+	if body := prBody(t, createdPR(t, f)); body != "narrative\n\nCloses #30\nPart of #33" {
+		t.Errorf("body = %q, want it untouched", body)
 	}
 }
 

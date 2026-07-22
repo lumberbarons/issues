@@ -228,6 +228,9 @@ func (a *App) composePRBody(opts PROpts, issue model.Issue) (string, error) {
 	if err != nil {
 		return "", genericErr("cannot read --body-file: %v", err)
 	}
+	// A hand-written body keeps whatever links it already makes; the rest are
+	// appended, so the escape hatch ends up with the same set of links the
+	// template would have written — never a second copy of one.
 	body := strings.TrimRight(string(raw), "\n")
 	switch refs := conventions.FixesReferences(body); {
 	case len(refs) > 1:
@@ -235,7 +238,13 @@ func (a *App) composePRBody(opts PROpts, issue model.Issue) (string, error) {
 	case len(refs) == 1 && refs[0] != issue.Number:
 		return "", usageErr("--body-file closes #%d but this PR is for #%d", refs[0], issue.Number)
 	case len(refs) == 1:
-		return body, nil
+		trailers.Fixes = 0
 	}
-	return body + "\n\n" + conventions.FixesLine(issue.Number), nil
+	if trailers.Epic > 0 && strings.Contains(body, conventions.PartOfLine(trailers.Epic)) {
+		trailers.Epic = 0
+	}
+	if missing := trailers.Render(); missing != "" {
+		body += "\n\n" + missing
+	}
+	return body, nil
 }

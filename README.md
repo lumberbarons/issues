@@ -73,7 +73,8 @@ issues pr [--for N] [--title "..."]
                                   # the issue (What/Why default to its Fix/Approach and
                                   # Problem/Goal), exactly one "Fixes #n", base is the
                                   # repo default. Push the branch first.
-          [--body-file F]         # long-form escape hatch (Fixes #n appended if absent)
+          [--body-file F]         # long-form escape hatch (missing Fixes/Part of
+                                  # trailers are appended, never duplicated)
           [--base BRANCH] [--ready]
 issues close <n> --reason "..." [--completed | --duplicate-of M]
 issues block <n> --on <m>         # native dependency, cycle-checked

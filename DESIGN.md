@@ -193,11 +193,12 @@ merges, checks and PR listing stay where they are.
   ambiguous is a usage error naming the candidates; `--for <n>` settles it. The
   cost of guessing wrong is closing the wrong issue on merge, so guessing is
   not on the menu.
-- **Exactly one `Fixes #n`.** The composed body always writes one. A
-  `--body-file` that already carries a closing keyword (`fixes`/`closes`/
-  `resolves`, any case — GitHub acts on all of them) is left alone if it names
-  the right issue and refused if it names another or several; only a body with
-  none gets the trailer appended. A sub-issue's PR also gets `Part of #<epic>`.
+- **Exactly one `Fixes #n`.** The composed body always writes one, plus
+  `Part of #<epic>` when the issue is a sub-issue. A `--body-file` gets
+  whichever of those links it doesn't already make, so the escape hatch can't
+  quietly lose one — and never a second copy. A body already carrying a
+  closing keyword (`fixes`/`closes`/`resolves`, any case — GitHub acts on all
+  of them) is refused if it names a different issue, or several.
 - **Body template.** `### What / ### Why / ### Testing`, mirroring the issue
   template and lives beside it in `internal/conventions`. What and Why default
   to the issue's own `Fix`/`Approach` and `Problem`/`Goal` sections — the issue

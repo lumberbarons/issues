@@ -49,6 +49,24 @@ type PRTrailers struct {
 // never drift apart.
 func FixesLine(n int) string { return fmt.Sprintf("Fixes #%d", n) }
 
+// PartOfLine names the epic a sub-issue's PR belongs to.
+func PartOfLine(n int) string { return fmt.Sprintf("Part of #%d", n) }
+
+// Render returns the trailer block, empty when there is nothing to link.
+// Both body paths go through it: the composed one renders the whole set,
+// the --body-file one renders whatever the author didn't already write, so
+// the escape hatch can't quietly lose a link the template would have made.
+func (t PRTrailers) Render() string {
+	var lines []string
+	if t.Fixes > 0 {
+		lines = append(lines, FixesLine(t.Fixes))
+	}
+	if t.Epic > 0 {
+		lines = append(lines, PartOfLine(t.Epic))
+	}
+	return strings.Join(lines, "\n")
+}
+
 // Compose renders the PR body: the provided sections in template order,
 // then the trailers. Empty sections are omitted rather than left as bare
 // headers, matching the issue template's rule.
@@ -63,12 +81,7 @@ func (s PRSections) Compose(t PRTrailers) string {
 	section("What", s.What)
 	section("Why", s.Why)
 	section("Testing", s.Testing)
-	if t.Fixes > 0 {
-		fmt.Fprintf(&b, "%s\n", FixesLine(t.Fixes))
-	}
-	if t.Epic > 0 {
-		fmt.Fprintf(&b, "Part of #%d\n", t.Epic)
-	}
+	b.WriteString(t.Render())
 	return strings.TrimSpace(b.String())
 }
 
