@@ -168,3 +168,34 @@ func TestIsConventionalBranch(t *testing.T) {
 		}
 	}
 }
+
+// PRTitle is where the changelog convention is enforced (#44), and every
+// wrong answer either mis-files a release note or corrupts the subject a
+// squash merge writes, so its rules are pinned directly.
+func TestPRTitle(t *testing.T) {
+	tests := []struct {
+		name      string
+		issueType string
+		title     string
+		want      string
+	}{
+		{"bug", "bug", "pr links the wrong issue", "fix: pr links the wrong issue"},
+		{"enhancement", "enhancement", "reopen command", "feat: reopen command"},
+		{"task", "task", "token-efficiency comparison", "chore: token-efficiency comparison"},
+		{"untyped", "", "drive-by report", "drive-by report"},
+		{"unknown type", "question", "from a label set we do not own", "from a label set we do not own"},
+		{"already prefixed", "bug", "fix: filed with a prefix", "fix: filed with a prefix"},
+		{"prefixed with a different type", "bug", "chore: filed with a prefix", "chore: filed with a prefix"},
+		{"prefixed with a scope", "enhancement", "feat(cli): scoped", "feat(cli): scoped"},
+		{"prefixed as breaking", "enhancement", "feat!: breaking", "feat!: breaking"},
+		{"colon that is not a prefix", "bug", "ready: sorts epics last", "fix: ready: sorts epics last"},
+		{"prose containing a colon", "task", "document the rule: it is subtle", "chore: document the rule: it is subtle"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PRTitle(tc.issueType, tc.title); got != tc.want {
+				t.Errorf("PRTitle(%q, %q) = %q, want %q", tc.issueType, tc.title, got, tc.want)
+			}
+		})
+	}
+}
