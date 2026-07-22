@@ -243,6 +243,21 @@ func TestPRFallsBackToTheBranchNumberWhenNothingIsClaimed(t *testing.T) {
 	}
 }
 
+// The branch-number fallback is subject to the same epic rule as every
+// other path: resolving feat/33-x to epic #33 would write Fixes #33 and
+// close the epic on merge.
+func TestPRBranchNumberNamingAnEpicIsNotAFallback(t *testing.T) {
+	epic := issue(33, "Epic: the tree")
+	epic.SubIssues = []model.Ref{{Number: 30, State: "OPEN"}}
+	f := newFake(epic, issue(30, "child, unclaimed"))
+	app, _, _ := newApp(f)
+	onBranch(app, "feat/33-the-tree")
+
+	err := app.PR(context.Background(), PROpts{})
+	requireExit(t, err, ExitUsage, "cannot tell which issue")
+	assertNoPR(t, f)
+}
+
 // A digit run inside a word is part of the branch name, not a link: linking
 // fix/500-error to #500 would close an unrelated issue on merge.
 func TestPRIgnoresDigitsInsideBranchWords(t *testing.T) {
