@@ -188,6 +188,7 @@ func TestPRTitle(t *testing.T) {
 		{"prefixed with a different type", "bug", "chore: filed with a prefix", "chore: filed with a prefix"},
 		{"prefixed with a scope", "enhancement", "feat(cli): scoped", "feat(cli): scoped"},
 		{"prefixed as breaking", "enhancement", "feat!: breaking", "feat!: breaking"},
+		{"prefixed in mixed case", "bug", "Fix: crash on startup", "Fix: crash on startup"},
 		{"colon that is not a prefix", "bug", "ready: sorts epics last", "fix: ready: sorts epics last"},
 		{"prose containing a colon", "task", "document the rule: it is subtle", "chore: document the rule: it is subtle"},
 	}
