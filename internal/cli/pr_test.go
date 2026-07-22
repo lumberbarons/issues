@@ -535,6 +535,22 @@ func TestPRBodyFileKeepsExistingTrailers(t *testing.T) {
 	}
 }
 
+// The two trailers are independent: a sub-issue whose body already closes
+// its issue still gains the epic link it didn't write.
+func TestPRBodyFileAppendsTheEpicTrailerAlone(t *testing.T) {
+	path := writeTemp(t, "narrative\n\nCloses #30\n")
+	f := newFake(subIssueOf(claimed(30, "one"), 33))
+	app, _, _ := newApp(f)
+	onBranch(app, "feat/x")
+
+	if err := app.PR(context.Background(), PROpts{BodyFile: path}); err != nil {
+		t.Fatal(err)
+	}
+	if body := prBody(t, createdPR(t, f)); body != "narrative\n\nCloses #30\n\nPart of #33" {
+		t.Errorf("body = %q", body)
+	}
+}
+
 func TestPRBodyFileRejectsAMismatchedFixes(t *testing.T) {
 	path := writeTemp(t, "Fixes #99\n")
 	f := newFake(claimed(30, "one"))
