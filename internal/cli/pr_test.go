@@ -64,8 +64,12 @@ func TestPRCreatesDraftForTheClaimedIssue(t *testing.T) {
 	if !strings.Contains(call, "Fixes #30") {
 		t.Errorf("PR body has no Fixes trailer: %s", call)
 	}
-	if got := out.String(); !strings.Contains(got, "created draft PR #501 for #30") {
-		t.Errorf("output = %q", got)
+	// Both lines, exactly: the summary an agent branches on and the URL a
+	// human clicks. Asserted whole so dropping either one fails here.
+	want := "created draft PR #501 for #30: PR creation command\n" +
+		"https://github.com/o/r/pull/501\n"
+	if got := out.String(); got != want {
+		t.Errorf("output = %q, want %q", got, want)
 	}
 }
 
