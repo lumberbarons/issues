@@ -109,10 +109,10 @@ func (a *App) PR(ctx context.Context, opts PROpts) error {
 		Number: created.Number, URL: created.URL, Draft: created.Draft,
 		Fixes: issue.Number, Head: state.Branch, Base: base, Title: title,
 	}, func() {
+		// The summary an agent branches on, then the URL a human clicks; the
+		// create response always carries one, so it is not conditional.
 		a.printf("created %s #%d for #%d: %s\n", kind, created.Number, issue.Number, title)
-		if created.URL != "" {
-			a.printf("%s\n", created.URL)
-		}
+		a.printf("%s\n", created.URL)
 	})
 }
 
