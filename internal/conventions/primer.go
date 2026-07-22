@@ -18,10 +18,11 @@ Output: one line per issue — #n priority type (areas) title [blocked by #m; ep
 list sorts ready work first, then claimed, blocked, epics. Prefer text output; --json on list commands emits NDJSON.
 
 Commands: ready | list [--label X --epic N --closed --bodies (with --json)] | show <n> | search <terms> | triage |
-create --type T --title "..." [--priority Pn --area X --blocked-by N --parent N --discovered-from N --body-file F] |
+create --type T --title "..." --goal|--problem "..." --approach|--fix "..." --done-when "..." (repeatable)
+  [--where X --priority Pn --area X --blocked-by N --parent N --discovered-from N] (--body-file F for long bodies) |
 start <n> [--priority Pn] | set <n> [--priority Pn --type T --add-area X --remove-area X --parent N --no-parent --title "..."] |
 close <n> --reason "..." [--completed | --duplicate-of M] | block <n> --on <m> | unblock <n> --from <m> |
-epic create --title "..." [--children N,N] | epic status [<n>] |
+epic create --title "..." [--children N,N --goal "..." --done-when "..." --body-file F] | epic status [<n>] |
 apply <plan.jsonl> [--dry-run] (batch create from a JSONL plan; schema: issues apply --help). All take --json.`
 
 // ClaudeSnippet is what `issues init` prints for the repo's CLAUDE.md: the

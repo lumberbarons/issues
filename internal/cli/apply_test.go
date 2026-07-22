@@ -78,6 +78,18 @@ func TestApplyCreatesAndWires(t *testing.T) {
 	}
 }
 
+func TestApplyComposesSectionBodies(t *testing.T) {
+	fixture := `{"title":"T","type":"task","goal":"Ship it","done-when":["tests pass"]}` + "\n"
+	f, app, opts := applySetup(t, fixture)
+	if err := app.Apply(ctx, opts); err != nil {
+		t.Fatal(err)
+	}
+	want := "### Goal\n\nShip it\n\n### Done when\n\n- [ ] tests pass"
+	if got := f.byNumber(101).Body; got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
 func TestApplyDryRun(t *testing.T) {
 	f, app, opts := applySetup(t, applyFixture)
 	opts.DryRun = true

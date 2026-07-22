@@ -116,6 +116,77 @@ func TestCreateBodyFile(t *testing.T) {
 	}
 }
 
+func TestCreateSections(t *testing.T) {
+	f := newFake()
+	app, _, _ := newApp(f)
+	err := app.Create(ctx, CreateOpts{
+		Title: "T", Type: "task",
+		Sections: conventions.Sections{
+			Goal:     "Ship the thing",
+			Approach: "Carefully",
+			DoneWhen: []string{"tests pass", "docs updated"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "### Goal\n\nShip the thing\n\n### Approach\n\nCarefully\n\n### Done when\n\n- [ ] tests pass\n- [ ] docs updated"
+	if got := f.byNumber(101).Body; got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+func TestCreateSectionsWithDiscoveredFrom(t *testing.T) {
+	f := newFake()
+	app, _, _ := newApp(f)
+	err := app.Create(ctx, CreateOpts{
+		Title: "T", Type: "bug", DiscoveredFrom: 7,
+		Sections: conventions.Sections{Problem: "It breaks"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "### Problem\n\nIt breaks\n\nDiscovered while working on #7"
+	if got := f.byNumber(101).Body; got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+// usageError asserts a usage refusal carrying the given message fragment,
+// so a rule firing the wrong branch's message can't pass as the right one.
+func usageError(t *testing.T, err error, wantMsg string) {
+	t.Helper()
+	var exitErr *ExitError
+	if !errors.As(err, &exitErr) {
+		t.Fatalf("expected ExitError, got %v", err)
+	}
+	if exitErr.Code != ExitUsage {
+		t.Errorf("exit code = %d (%s), want %d", exitErr.Code, exitErr.Message, ExitUsage)
+	}
+	if !strings.Contains(exitErr.Message, wantMsg) {
+		t.Errorf("message = %q, want substring %q", exitErr.Message, wantMsg)
+	}
+}
+
+func TestCreateSectionValidation(t *testing.T) {
+	f := newFake()
+	app, _, _ := newApp(f)
+	sections := conventions.Sections{Goal: "G"}
+	usageError(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
+		Sections: conventions.Sections{Problem: "P", Goal: "G"}}), "--problem and --goal are mutually exclusive")
+	usageError(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
+		Sections: conventions.Sections{Fix: "F", Approach: "A"}}), "--fix and --approach are mutually exclusive")
+	usageError(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
+		Sections: sections, BodyFile: "f"}), "section flags")
+	usageError(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
+		Sections: sections, Edit: true}), "section flags")
+	usageError(t, app.Create(ctx, CreateOpts{Title: "T", Type: "task",
+		Sections: conventions.Sections{DoneWhen: []string{" "}}}), "--done-when items cannot be empty")
+	if len(f.calls) != 0 {
+		t.Errorf("refused creates still called the API: %v", f.calls)
+	}
+}
+
 func TestCreateBodyFileMissing(t *testing.T) {
 	app, _, _ := newApp(newFake())
 	err := app.Create(ctx, CreateOpts{Title: "T", Type: "bug", BodyFile: "/nonexistent"})
@@ -556,7 +627,7 @@ func TestUnblockNotBlocked(t *testing.T) {
 func TestEpicCreate(t *testing.T) {
 	f := newFake(issue(1, "Child A", "P2", "task"), issue(2, "Child B", "P2", "task"))
 	app, out, _ := newApp(f)
-	if err := app.EpicCreate(ctx, "Big feature", []int{1, 2}); err != nil {
+	if err := app.EpicCreate(ctx, EpicCreateOpts{Title: "Big feature", Children: []int{1, 2}}); err != nil {
 		t.Fatal(err)
 	}
 	epic := f.byNumber(101)
@@ -577,13 +648,80 @@ func TestEpicCreate(t *testing.T) {
 func TestEpicCreateKeepsExistingPrefix(t *testing.T) {
 	f := newFake()
 	app, _, _ := newApp(f)
-	if err := app.EpicCreate(ctx, "Epic: already prefixed", nil); err != nil {
+	if err := app.EpicCreate(ctx, EpicCreateOpts{Title: "Epic: already prefixed"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.byNumber(101).Title; got != "Epic: already prefixed" {
 		t.Errorf("title = %q", got)
 	}
-	exitCode(t, app.EpicCreate(ctx, "", nil), ExitUsage)
+	exitCode(t, app.EpicCreate(ctx, EpicCreateOpts{}), ExitUsage)
+}
+
+func TestEpicCreateSections(t *testing.T) {
+	f := newFake()
+	app, _, _ := newApp(f)
+	err := app.EpicCreate(ctx, EpicCreateOpts{
+		Title:    "Big feature",
+		Sections: conventions.Sections{Goal: "The narrative", DoneWhen: []string{"all children closed"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "### Goal\n\nThe narrative\n\n### Done when\n\n- [ ] all children closed"
+	if got := f.byNumber(101).Body; got != want {
+		t.Errorf("body = %q, want %q", got, want)
+	}
+}
+
+func TestEpicCreateBodyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "body.md")
+	if err := os.WriteFile(path, []byte("### Goal\n\nlong-form\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f := newFake()
+	app, _, _ := newApp(f)
+	if err := app.EpicCreate(ctx, EpicCreateOpts{Title: "Big", BodyFile: path}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.byNumber(101).Body; !strings.Contains(got, "long-form") {
+		t.Errorf("body = %q", got)
+	}
+}
+
+func TestEpicCreateEdit(t *testing.T) {
+	f := newFake()
+	app, _, _ := newApp(f)
+	var seeded string
+	app.Edit = func(initial string) (string, error) {
+		seeded = initial
+		return "### Goal\n\nfilled in\n\n### Approach\n\n\n### Done when\n\n- [ ] \n", nil
+	}
+	if err := app.EpicCreate(ctx, EpicCreateOpts{Title: "Big", Edit: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Epics are containers, not bugs: the seeded skeleton uses the
+	// goal/approach wording.
+	if !strings.Contains(seeded, "### Goal") || strings.Contains(seeded, "### Problem") {
+		t.Errorf("editor seeded with wrong template: %q", seeded)
+	}
+	body := f.byNumber(101).Body
+	if !strings.Contains(body, "filled in") || strings.Contains(body, "Approach") {
+		t.Errorf("empty sections not stripped: %q", body)
+	}
+}
+
+func TestEpicCreateSectionValidation(t *testing.T) {
+	f := newFake()
+	app, _, _ := newApp(f)
+	usageError(t, app.EpicCreate(ctx, EpicCreateOpts{Title: "Big",
+		Sections: conventions.Sections{Goal: "G"}, BodyFile: "f"}), "section flags")
+	usageError(t, app.EpicCreate(ctx, EpicCreateOpts{Title: "Big",
+		Sections: conventions.Sections{Problem: "P", Goal: "G"}}), "--problem and --goal are mutually exclusive")
+	usageError(t, app.EpicCreate(ctx, EpicCreateOpts{Title: "Big",
+		BodyFile: "f", Edit: true}), "--body-file and --edit are mutually exclusive")
+	if len(f.calls) != 0 {
+		t.Errorf("refused epic creates still called the API: %v", f.calls)
+	}
 }
 
 func TestSetValidatesBeforeMutating(t *testing.T) {
@@ -658,7 +796,7 @@ func TestSetParentMissing(t *testing.T) {
 func TestEpicCreateChildMissing(t *testing.T) {
 	f := newFake()
 	app, _, _ := newApp(f)
-	err := app.EpicCreate(ctx, "Big", []int{99})
+	err := app.EpicCreate(ctx, EpicCreateOpts{Title: "Big", Children: []int{99}})
 	if err == nil || !strings.Contains(err.Error(), "attaching #99 failed") {
 		t.Errorf("err = %v", err)
 	}

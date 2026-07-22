@@ -196,9 +196,13 @@ func applyTitle(e plan.Entry) string {
 	return e.Title
 }
 
-// applyBody appends the discovered-from link the same way create does.
+// applyBody composes structured section fields the same way the create
+// section flags do, and appends the discovered-from link.
 func applyBody(e plan.Entry) string {
 	body := e.Body
+	if !e.Sections.IsZero() {
+		body = e.Sections.Compose()
+	}
 	if e.DiscoveredFrom > 0 {
 		link := conventions.DiscoveredFrom(e.DiscoveredFrom)
 		if body == "" {

@@ -13,6 +13,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/lumberbarons/issues/internal/conventions"
 	"github.com/lumberbarons/issues/internal/model"
 )
 
@@ -64,6 +65,7 @@ type Entry struct {
 	Priority       model.Priority
 	Areas          []string
 	Body           string
+	Sections       conventions.Sections
 	Parent         *Ref
 	BlockedBy      []Ref
 	DiscoveredFrom int
@@ -92,6 +94,12 @@ type rawEntry struct {
 	Priority       string   `json:"priority"`
 	Areas          []string `json:"areas"`
 	Body           string   `json:"body"`
+	Where          string   `json:"where"`
+	Problem        string   `json:"problem"`
+	Goal           string   `json:"goal"`
+	Fix            string   `json:"fix"`
+	Approach       string   `json:"approach"`
+	DoneWhen       []string `json:"done-when"`
 	Parent         *Ref     `json:"parent"`
 	BlockedBy      []Ref    `json:"blocked-by"`
 	DiscoveredFrom int      `json:"discovered-from"`
@@ -158,9 +166,29 @@ func parseLine(raw []byte) (Entry, error) {
 	if re.DiscoveredFrom < 0 {
 		return Entry{}, fmt.Errorf("discovered-from must be an issue number (got %d)", re.DiscoveredFrom)
 	}
+	sections := conventions.Sections{
+		Where: re.Where, Problem: re.Problem, Goal: re.Goal,
+		Fix: re.Fix, Approach: re.Approach, DoneWhen: re.DoneWhen,
+	}
+	// The section fields follow the create flags' rules: wording pairs pick
+	// one, and structured sections don't mix with a raw body.
+	if re.Problem != "" && re.Goal != "" {
+		return Entry{}, fmt.Errorf("problem and goal are mutually exclusive")
+	}
+	if re.Fix != "" && re.Approach != "" {
+		return Entry{}, fmt.Errorf("fix and approach are mutually exclusive")
+	}
+	for _, item := range re.DoneWhen {
+		if strings.TrimSpace(item) == "" {
+			return Entry{}, fmt.Errorf("done-when items cannot be empty")
+		}
+	}
+	if re.Body != "" && !sections.IsZero() {
+		return Entry{}, fmt.Errorf("body and section fields (where/problem/goal/fix/approach/done-when) are mutually exclusive")
+	}
 	return Entry{
 		ID: re.ID, Title: re.Title, Type: re.Type, Priority: priority,
-		Areas: re.Areas, Body: re.Body, Parent: re.Parent,
+		Areas: re.Areas, Body: re.Body, Sections: sections, Parent: re.Parent,
 		BlockedBy: re.BlockedBy, DiscoveredFrom: re.DiscoveredFrom,
 	}, nil
 }

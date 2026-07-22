@@ -55,6 +55,18 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestParseSections(t *testing.T) {
+	fixture := `{"title":"x","type":"task","where":"internal/cli","goal":"Ship","approach":"Care","done-when":["a","b"]}` + "\n"
+	entries, err := Parse(strings.NewReader(fixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := entries[0].Sections
+	if s.Where != "internal/cli" || s.Goal != "Ship" || s.Approach != "Care" || len(s.DoneWhen) != 2 {
+		t.Errorf("sections = %+v", s)
+	}
+}
+
 func TestParseEmpty(t *testing.T) {
 	for _, in := range []string{"", "\n\n"} {
 		entries, err := Parse(strings.NewReader(in))
@@ -90,6 +102,10 @@ func TestParseErrors(t *testing.T) {
 		{"area is a priority", task(`,"areas":["P1"]`), `area "P1" collides`},
 		{"area is a type", task(`,"areas":["bug"]`), `area "bug" collides`},
 		{"area is in-progress", task(`,"areas":["in-progress"]`), `area "in-progress" collides`},
+		{"problem and goal", task(`,"problem":"p","goal":"g"`), "problem and goal are mutually exclusive"},
+		{"fix and approach", task(`,"fix":"f","approach":"a"`), "fix and approach are mutually exclusive"},
+		{"empty done-when item", task(`,"done-when":[" "]`), "done-when items cannot be empty"},
+		{"body and sections", task(`,"body":"b","goal":"g"`), "body and section fields"},
 		{"duplicate id", task(`,"id":"a"`) + task(`,"id":"a"`), `line 2: duplicate id "a" (first used on line 1)`},
 		{"reserved id", task(`,"id":"line:9"`), "reserved"},
 		{"unknown parent", task(`,"parent":"nope"`), `parent "nope" does not match any entry id`},

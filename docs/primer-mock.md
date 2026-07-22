@@ -13,7 +13,8 @@ Conventions (enforced by the tool):
 
 Commands:
   issues ready | list [--label X --epic N --closed] | show <n>
-  issues create --type T [--priority P --area A --blocked-by N --parent N --discovered-from N] --title "..."
+  issues create --type T --title "..." --goal|--problem "..." --approach|--fix "..." --done-when "..." (repeatable)
+                [--where X --priority P --area A --blocked-by N --parent N --discovered-from N]
   issues start <n> | close <n> --reason "..." | block <n> --on <m> | unblock <n> --from <m>
   issues epic create --title "..." [--children N,N] | epic status [<n>]
   All commands: --json, --repo owner/name.

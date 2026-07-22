@@ -38,6 +38,13 @@ var omittedFlags = map[string]bool{
 	"start --force":    true, // escape hatch
 	"apply --state":    true, // plumbing; the default is right
 	"apply --throttle": true, // plumbing; the default is right
+	// epic create's body flags mirror create's exactly; the primer shows the
+	// epic-typical --goal/--done-when form and the long-form escape hatch.
+	"epic create --where":    true,
+	"epic create --problem":  true,
+	"epic create --fix":      true,
+	"epic create --approach": true,
+	"epic create --edit":     true, // interactive, not for agents
 }
 
 type leaf struct {
