@@ -8,6 +8,7 @@ import (
 	"io"
 
 	"github.com/lumberbarons/issues/internal/gh"
+	"github.com/lumberbarons/issues/internal/git"
 	"github.com/lumberbarons/issues/internal/model"
 	"github.com/lumberbarons/issues/internal/render"
 )
@@ -48,6 +49,9 @@ type App struct {
 	// Edit opens an editor seeded with initial text and returns the result;
 	// wired to $EDITOR by main, injected by tests.
 	Edit func(initial string) (string, error)
+	// Git reads the local branch state `pr` opens from; wired to the git
+	// binary by main, injected by tests.
+	Git func() (git.State, error)
 }
 
 func (a *App) printf(format string, args ...any) {

@@ -18,6 +18,7 @@ import (
 	"github.com/lumberbarons/issues/internal/conventions"
 	"github.com/lumberbarons/issues/internal/editor"
 	"github.com/lumberbarons/issues/internal/gh"
+	"github.com/lumberbarons/issues/internal/git"
 
 	"github.com/cli/go-gh/v2/pkg/repository"
 )
@@ -70,6 +71,7 @@ func buildApp(cmd *ucli.Command) (*appcli.App, error) {
 		ErrOut: os.Stderr,
 		JSON:   cmd.Bool("json"),
 		Edit:   editor.Edit,
+		Git:    git.Current,
 	}, nil
 }
 
@@ -86,7 +88,7 @@ func root() *ucli.Command {
 		Flags:   globalFlags(),
 		Commands: []*ucli.Command{
 			primeCmd(), readyCmd(), listCmd(), showCmd(), searchCmd(),
-			createCmd(), startCmd(), triageCmd(), setCmd(), closeCmd(),
+			createCmd(), startCmd(), triageCmd(), setCmd(), prCmd(), closeCmd(),
 			blockCmd(), unblockCmd(), epicCmd(), applyCmd(), initCmd(),
 			hooksCmd(), migrateCmd(),
 		},
@@ -309,6 +311,48 @@ func setCmd() *ucli.Command {
 				Parent:      cmd.Int("parent"),
 				NoParent:    cmd.Bool("no-parent"),
 				Title:       cmd.String("title"),
+			})
+		},
+	}
+}
+
+func prCmd() *ucli.Command {
+	return &ucli.Command{
+		Name:  "pr",
+		Usage: "open a draft PR for the claimed issue, body composed from tracker state",
+		Description: `Composes the PR the workflow prescribes: the linked issue is inferred
+from what you have claimed (a number in the branch name breaks ties, and
+--for <n> settles it outright), the body is the What/Why/Testing template
+with exactly one "Fixes #n" so the merge closes the issue, and the base is
+the repo's default branch. What and Why default to the issue's own
+Fix/Approach and Problem/Goal sections. Push the branch first — GitHub can
+only open a PR for a ref it can see.`,
+		Flags: []ucli.Flag{
+			&ucli.IntFlag{Name: "for", Usage: "link issue `N` instead of inferring it"},
+			&ucli.StringFlag{Name: "title", Usage: "PR title (default: the issue title)"},
+			&ucli.StringFlag{Name: "what", Usage: "body section: what the change does (default: the issue's Fix/Approach)"},
+			&ucli.StringFlag{Name: "why", Usage: "body section: why (default: the issue's Problem/Goal)"},
+			&ucli.StringFlag{Name: "testing", Usage: "body section: how it was verified"},
+			&ucli.StringFlag{Name: "body-file", Usage: "read the whole body from `FILE` (Fixes #n is appended if absent)"},
+			&ucli.StringFlag{Name: "base", Usage: "target `BRANCH` (default: the repo's default branch)"},
+			&ucli.BoolFlag{Name: "ready", Usage: "open for review instead of as a draft"},
+		},
+		Action: func(ctx context.Context, cmd *ucli.Command) error {
+			app, err := buildApp(cmd)
+			if err != nil {
+				return err
+			}
+			return app.PR(ctx, appcli.PROpts{
+				For:   cmd.Int("for"),
+				Title: cmd.String("title"),
+				Sections: conventions.PRSections{
+					What:    cmd.String("what"),
+					Why:     cmd.String("why"),
+					Testing: cmd.String("testing"),
+				},
+				BodyFile: cmd.String("body-file"),
+				Base:     cmd.String("base"),
+				Ready:    cmd.Bool("ready"),
 			})
 		},
 	}

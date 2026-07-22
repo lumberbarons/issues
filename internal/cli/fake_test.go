@@ -34,6 +34,12 @@ type fakeClient struct {
 	// searchTotal, when larger than the match count, simulates a capped
 	// search response where the server reports more matches than returned.
 	searchTotal int
+	// defaultBranch and openPRs are the pull-request half of the fake:
+	// created PRs land in openPRs keyed by head branch, so a second `pr` on
+	// the same branch sees the first one exactly as the API would.
+	defaultBranch string
+	openPRs       map[string]gh.PullRequest
+	nextPR        int
 }
 
 // failPoint is a failAfter entry: calls successful calls, then err.
@@ -47,6 +53,7 @@ func newFake(issues ...*model.Issue) *fakeClient {
 		viewer: "me", comments: map[int][]string{},
 		failOn: map[string]error{}, failAfter: map[string]failPoint{},
 		callCounts: map[string]int{}, nextNum: 100,
+		defaultBranch: "main", openPRs: map[string]gh.PullRequest{}, nextPR: 500,
 	}
 	for _, i := range issues {
 		if i.ID == "" {
@@ -90,7 +97,6 @@ func (f *fakeClient) requireIssue(n int) (*model.Issue, error) {
 	}
 	return nil, fmt.Errorf("issue #%d not found in o/r", n)
 }
-
 
 // refreshRefs recomputes Ref states and epic rollups after any mutation.
 func (f *fakeClient) refreshRefs() {
@@ -383,6 +389,32 @@ func (f *fakeClient) CreateLabel(ctx context.Context, label gh.Label) error {
 	}
 	f.labels = append(f.labels, label)
 	return nil
+}
+
+func (f *fakeClient) PullRequestContext(ctx context.Context, head string) (gh.PRContext, error) {
+	if err := f.record("PullRequestContext " + head); err != nil {
+		return gh.PRContext{}, err
+	}
+	out := gh.PRContext{DefaultBranch: f.defaultBranch}
+	if pr, ok := f.openPRs[head]; ok {
+		out.Existing = &pr
+	}
+	return out, nil
+}
+
+func (f *fakeClient) CreatePullRequest(ctx context.Context, pr gh.NewPullRequest) (gh.PullRequest, error) {
+	if err := f.record(fmt.Sprintf("CreatePullRequest %s→%s draft=%v %q body=%q",
+		pr.Head, pr.Base, pr.Draft, pr.Title, pr.Body)); err != nil {
+		return gh.PullRequest{}, err
+	}
+	f.nextPR++
+	created := gh.PullRequest{
+		Number: f.nextPR,
+		URL:    fmt.Sprintf("https://github.com/o/r/pull/%d", f.nextPR),
+		Draft:  pr.Draft,
+	}
+	f.openPRs[pr.Head] = created
+	return created, nil
 }
 
 // newApp wires an App to the fake with captured output.

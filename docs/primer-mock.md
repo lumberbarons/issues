@@ -1,6 +1,6 @@
 # issues primer — lumberbarons/solar-controller
 
-Workflow: issues ready → issues start <n> → branch (feat/|fix/|chore/) → PR body "Fixes #n".
+Workflow: issues ready → issues start <n> → branch (feat/|fix/|chore/) → push → issues pr.
 PRs close issues; `issues close` is only for wontfix/duplicate.
 File discovered work as you go: issues create ... --discovered-from <n>.
 Never work an epic directly — work its children; `ready` already excludes epics.
@@ -15,7 +15,8 @@ Commands:
   issues ready | list [--label X --epic N --closed] | show <n>
   issues create --type T --title "..." --goal|--problem "..." --approach|--fix "..." --done-when "..." (repeatable)
                 [--where X --priority P --area A --blocked-by N --parent N --discovered-from N]
-  issues start <n> | close <n> --reason "..." | block <n> --on <m> | unblock <n> --from <m>
+  issues start <n> | pr [--for N --testing "..."] | close <n> --reason "..."
+  issues block <n> --on <m> | unblock <n> --from <m>
   issues epic create --title "..." [--children N,N] | epic status [<n>]
   All commands: --json, --repo owner/name.
 

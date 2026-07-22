@@ -577,3 +577,95 @@ func TestAuthErrorOn401(t *testing.T) {
 		t.Errorf("AuthError message: %v", authErr)
 	}
 }
+
+func TestPullRequestContext(t *testing.T) {
+	f := newFakeServer(t)
+	f.graphql["defaultBranchRef"] = `{"data":{"repository":{
+		"defaultBranchRef":{"name":"main"},
+		"pullRequests":{"nodes":[{"number":12,"url":"https://github.com/o/r/pull/12","isDraft":true}]}}}}`
+	got, err := f.client(t).PullRequestContext(context.Background(), "feat/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DefaultBranch != "main" {
+		t.Errorf("DefaultBranch = %q, want main", got.DefaultBranch)
+	}
+	if got.Existing == nil || got.Existing.Number != 12 || !got.Existing.Draft {
+		t.Errorf("Existing = %+v, want the open draft #12", got.Existing)
+	}
+	vars, _ := decodeBody(t, f.requests[0].Body)["variables"].(map[string]any)
+	if vars["head"] != "feat/x" {
+		t.Errorf("head filter = %v, want feat/x — an unfiltered query would return someone else's PR", vars["head"])
+	}
+}
+
+// A branch with no PR yet is the normal case, and an empty nodes list must
+// read as "none", not as a zero-valued PR the caller would refuse on.
+func TestPullRequestContextWithoutAnExistingPR(t *testing.T) {
+	f := newFakeServer(t)
+	f.graphql["defaultBranchRef"] = `{"data":{"repository":{
+		"defaultBranchRef":{"name":"trunk"},"pullRequests":{"nodes":[]}}}}`
+	got, err := f.client(t).PullRequestContext(context.Background(), "feat/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Existing != nil {
+		t.Errorf("Existing = %+v, want nil", got.Existing)
+	}
+	if got.DefaultBranch != "trunk" {
+		t.Errorf("DefaultBranch = %q, want trunk", got.DefaultBranch)
+	}
+}
+
+// An empty repository has no default branch; that is a nil ref, not a crash.
+func TestPullRequestContextWithoutADefaultBranch(t *testing.T) {
+	f := newFakeServer(t)
+	f.graphql["defaultBranchRef"] = `{"data":{"repository":{
+		"defaultBranchRef":null,"pullRequests":{"nodes":[]}}}}`
+	got, err := f.client(t).PullRequestContext(context.Background(), "feat/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DefaultBranch != "" {
+		t.Errorf("DefaultBranch = %q, want empty", got.DefaultBranch)
+	}
+}
+
+func TestPullRequestContextError(t *testing.T) {
+	f := newFakeServer(t)
+	f.graphql["defaultBranchRef"] = `{"errors":[{"message":"nope"}]}`
+	if _, err := f.client(t).PullRequestContext(context.Background(), "feat/x"); err == nil {
+		t.Fatal("PullRequestContext() succeeded on a GraphQL error")
+	}
+}
+
+func TestCreatePullRequest(t *testing.T) {
+	f := newFakeServer(t)
+	f.rest["POST /repos/o/r/pulls"] = restResponse{201,
+		`{"number":12,"html_url":"https://github.com/o/r/pull/12","draft":true}`}
+	pr, err := f.client(t).CreatePullRequest(context.Background(), NewPullRequest{
+		Title: "feat: x", Body: "Fixes #30", Head: "feat/x", Base: "main", Draft: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.Number != 12 || pr.URL != "https://github.com/o/r/pull/12" || !pr.Draft {
+		t.Errorf("CreatePullRequest() = %+v", pr)
+	}
+	got := decodeBody(t, f.requests[len(f.requests)-1].Body)
+	want := map[string]any{
+		"title": "feat: x", "body": "Fixes #30",
+		"head": "feat/x", "base": "main", "draft": true,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("request payload = %v, want %v", got, want)
+	}
+}
+
+func TestCreatePullRequestError(t *testing.T) {
+	f := newFakeServer(t)
+	f.rest["POST /repos/o/r/pulls"] = restResponse{422, `{"message":"A pull request already exists"}`}
+	if _, err := f.client(t).CreatePullRequest(context.Background(), NewPullRequest{Head: "feat/x", Base: "main"}); err == nil {
+		t.Fatal("CreatePullRequest() succeeded on a 422")
+	}
+}

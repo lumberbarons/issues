@@ -47,6 +47,33 @@ const (
 	CloseDuplicate  CloseReason = "DUPLICATE"
 )
 
+// PullRequest is a pull request, reduced to what the pr command reports.
+type PullRequest struct {
+	Number int
+	URL    string
+	Draft  bool
+}
+
+// NewPullRequest is the pr command's creation payload.
+type NewPullRequest struct {
+	Title string
+	Body  string
+	// Head and Base are branch names in this repo; cross-fork heads are out
+	// of scope (the workflow branches in place).
+	Head  string
+	Base  string
+	Draft bool
+}
+
+// PRContext is the repo-side state pr needs before creating: the branch to
+// target, and the open pull request already on the head branch, if any.
+// Both come from one query — a second PR on a branch is the failure the
+// command must name, not discover from a 422.
+type PRContext struct {
+	DefaultBranch string
+	Existing      *PullRequest
+}
+
 // Client is the API surface the commands use; the tests fake it.
 type Client interface {
 	// Viewer returns the authenticated user's login.
@@ -81,6 +108,10 @@ type Client interface {
 	RemoveSubIssue(ctx context.Context, parentNumber, childNumber int) error
 	ListLabels(ctx context.Context) ([]Label, error)
 	CreateLabel(ctx context.Context, label Label) error
+	// PullRequestContext fetches the default branch and any open pull
+	// request whose head is the given branch.
+	PullRequestContext(ctx context.Context, head string) (PRContext, error)
+	CreatePullRequest(ctx context.Context, pr NewPullRequest) (PullRequest, error)
 }
 
 // AuthError marks failures that mean "run gh auth login", mapped to a

@@ -35,7 +35,8 @@ issues hooks install # Claude Code SessionStart hook: `issues prime` at session 
 issues prime         # session-start context: conventions + ready work + live state
 issues ready         # what should I work on? (priority-sorted, zero open blockers)
 issues start 42      # claim it: assign @me + in-progress (refuses claimed work, exit 3)
-# ...branch, PR with "Fixes #42"...
+# ...branch (feat/|fix/|chore/), commit, push...
+issues pr            # draft PR for the claimed issue, body composed, "Fixes #42" enforced
 ```
 
 `issues ready` prints one line per issue, so you can tell it worked:
@@ -66,6 +67,14 @@ issues start <n> [--priority P0..P4] [--force]
 issues triage                     # issues missing priority/type labels
 issues set <n> [--priority ..] [--type ..] [--add-area X] [--remove-area X]
            [--parent N | --no-parent] [--title "..."]
+issues pr [--for N] [--title "..."]
+          [--what "..."] [--why "..."] [--testing "..."]
+                                  # draft PR for the claimed issue: body composed from
+                                  # the issue (What/Why default to its Fix/Approach and
+                                  # Problem/Goal), exactly one "Fixes #n", base is the
+                                  # repo default. Push the branch first.
+          [--body-file F]         # long-form escape hatch (Fixes #n appended if absent)
+          [--base BRANCH] [--ready]
 issues close <n> --reason "..." [--completed | --duplicate-of M]
 issues block <n> --on <m>         # native dependency, cycle-checked
 issues unblock <n> --from <m>

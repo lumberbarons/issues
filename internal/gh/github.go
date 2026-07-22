@@ -496,6 +496,64 @@ func (g *GitHub) CreateLabel(ctx context.Context, label Label) error {
 	return g.restDo(ctx, "POST", fmt.Sprintf("repos/%s/%s/labels", g.repo.Owner, g.repo.Name), payload, nil)
 }
 
+func (g *GitHub) PullRequestContext(ctx context.Context, head string) (PRContext, error) {
+	// One query: the base branch to target and the open PR already on this
+	// head. headRefName filters server-side, so "first: 1" is the answer,
+	// not a sample.
+	query := `
+	query($owner: String!, $name: String!, $head: String!) {
+		repository(owner: $owner, name: $name) {
+			defaultBranchRef { name }
+			pullRequests(headRefName: $head, states: OPEN, first: 1) {
+				nodes { number url isDraft }
+			}
+		}
+	}`
+	var resp struct {
+		Repository struct {
+			DefaultBranchRef *struct {
+				Name string `json:"name"`
+			} `json:"defaultBranchRef"`
+			PullRequests struct {
+				Nodes []struct {
+					Number  int    `json:"number"`
+					URL     string `json:"url"`
+					IsDraft bool   `json:"isDraft"`
+				} `json:"nodes"`
+			} `json:"pullRequests"`
+		} `json:"repository"`
+	}
+	vars := map[string]any{"owner": g.repo.Owner, "name": g.repo.Name, "head": head}
+	if err := g.gql.DoWithContext(ctx, query, vars, &resp); err != nil {
+		return PRContext{}, wrapErr(err)
+	}
+	var out PRContext
+	if ref := resp.Repository.DefaultBranchRef; ref != nil {
+		out.DefaultBranch = ref.Name
+	}
+	if nodes := resp.Repository.PullRequests.Nodes; len(nodes) > 0 {
+		out.Existing = &PullRequest{Number: nodes[0].Number, URL: nodes[0].URL, Draft: nodes[0].IsDraft}
+	}
+	return out, nil
+}
+
+func (g *GitHub) CreatePullRequest(ctx context.Context, pr NewPullRequest) (PullRequest, error) {
+	payload := map[string]any{
+		"title": pr.Title, "body": pr.Body,
+		"head": pr.Head, "base": pr.Base, "draft": pr.Draft,
+	}
+	var resp struct {
+		Number  int    `json:"number"`
+		HTMLURL string `json:"html_url"`
+		Draft   bool   `json:"draft"`
+	}
+	path := fmt.Sprintf("repos/%s/%s/pulls", g.repo.Owner, g.repo.Name)
+	if err := g.restDo(ctx, "POST", path, payload, &resp); err != nil {
+		return PullRequest{}, err
+	}
+	return PullRequest{Number: resp.Number, URL: resp.HTMLURL, Draft: resp.Draft}, nil
+}
+
 func (g *GitHub) issuesPath(suffix string) string {
 	return fmt.Sprintf("repos/%s/%s/issues%s", g.repo.Owner, g.repo.Name, suffix)
 }
