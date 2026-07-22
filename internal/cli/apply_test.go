@@ -352,6 +352,41 @@ func TestApplyReadsALegacyStateFile(t *testing.T) {
 	}
 }
 
+// A state file need not carry both halves, and JSON has two ways to say so:
+// omit the key, or write null — and null is the one that reaches through
+// into the decoded struct and leaves a nil map behind, which the next create
+// would panic assigning into. Both shapes must load as an empty map.
+func TestApplyReadsAPartialStateFile(t *testing.T) {
+	// The recorded edge is between issues this plan never names, so nothing
+	// is skipped for the wrong reason.
+	cases := map[string]string{
+		"mapping key omitted": `{"edges":{"parent:998->999":true}}`,
+		"mapping is null":     `{"mapping":null,"edges":{"parent:998->999":true}}`,
+		"edges is null":       `{"mapping":{},"edges":null}`,
+	}
+	for name, content := range cases {
+		t.Run(name, func(t *testing.T) {
+			f, app, opts := applySetup(t, applyFixture)
+			if err := os.WriteFile(opts.StatePath, []byte(content+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := app.Apply(ctx, opts); err != nil {
+				t.Fatal(err)
+			}
+			if f.byNumber(101) == nil {
+				t.Fatal("nothing created from a partial state file")
+			}
+			state := readState(t, opts.StatePath)
+			if len(state.Mapping) != 3 {
+				t.Errorf("mapping after apply = %v, want the three plan entries", state.Mapping)
+			}
+			if len(state.Edges) < 4 {
+				t.Errorf("edges after apply = %v, want the plan's four", state.Edges)
+			}
+		})
+	}
+}
+
 func TestApplyJSON(t *testing.T) {
 	_, app, opts := applySetup(t, applyFixture)
 	app.JSON = true
