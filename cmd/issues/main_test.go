@@ -38,6 +38,8 @@ var omittedFlags = map[string]bool{
 	"start --force":    true, // escape hatch
 	"apply --state":    true, // plumbing; the default is right
 	"apply --throttle": true, // plumbing; the default is right
+	"pr --body-file":   true, // long-form escape hatch; the composed body is the point
+	"pr --base":        true, // the repo default is right outside release branches
 	// epic create's body flags mirror create's exactly; the primer shows the
 	// epic-typical --goal/--done-when form and the long-form escape hatch.
 	"epic create --where":    true,

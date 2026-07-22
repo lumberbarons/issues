@@ -2,7 +2,7 @@ package conventions
 
 // PrimerStatic is the conventions-and-cheatsheet half of `issues prime`,
 // kept deliberately terse: the whole primer targets ~600 tokens.
-const PrimerStatic = `Workflow: issues ready → issues start <n> → branch (feat/|fix/|chore/) → PR "Fixes #n".
+const PrimerStatic = `Workflow: issues ready → issues start <n> → branch (feat/|fix/|chore/) → push → issues pr.
 Close via PR; issues close is for wontfix/duplicate only. Never work an epic directly.
 File discovered work: issues search <terms> first (dupes), then issues create ... --discovered-from <n>.
 
@@ -21,6 +21,8 @@ Commands: ready | list [--label X --epic N --closed --bodies (with --json)] | sh
 create --type T --title "..." --goal|--problem "..." --approach|--fix "..." --done-when "..." (repeatable)
   [--where X --priority Pn --area X --blocked-by N --parent N --discovered-from N] (--body-file F for long bodies) |
 start <n> [--priority Pn] | set <n> [--priority Pn --type T --add-area X --remove-area X --parent N --no-parent --title "..."] |
+pr [--for N --testing "..." --what "..." --why "..." --title "..." --ready] (draft PR for the claimed issue; body
+  composed from the issue, exactly one "Fixes #n" — push the branch first) |
 close <n> --reason "..." [--completed | --duplicate-of M] | block <n> --on <m> | unblock <n> --from <m> |
 epic create --title "..." [--children N,N --goal "..." --done-when "..." --body-file F] | epic status [<n>] |
 apply <plan.jsonl> [--dry-run] (batch create from a JSONL plan; schema: issues apply --help). All take --json.`

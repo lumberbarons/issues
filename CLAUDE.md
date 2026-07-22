@@ -32,7 +32,8 @@ The layering exists so everything with behavior is testable without hitting GitH
 | `internal/gh/` | Thin API layer: the `Client` interface and its go-gh-backed implementation; auth reuses the `gh` CLI's stored credentials (no auth flow of our own), repo detection comes from the git remote | Changing queries, auth, or API calls |
 | `internal/model/` | Pure domain logic: readiness, label normalization, cycle detection — no I/O, plain unit tests | Changing readiness or label semantics |
 | `internal/render/` | Text and JSON renderers, golden-file tested (`testdata/*.golden`) | Changing output format |
-| `internal/conventions/` | The opinions: label set, body template, primer text | Changing labels, the template, or the primer |
+| `internal/conventions/` | The opinions: label set, issue and PR body templates, primer text | Changing labels, a template, or the primer |
+| `internal/git/` | Local branch state for `pr` (current branch, has-upstream); shells out to git behind an injectable runner | Changing what `pr` knows about the checkout |
 | `internal/beads/` | Parses a beads (bd) `issues.jsonl` snapshot for `migrate` — pure parsing, no runtime dependency on bd | Changing the beads migration |
 | `docs/` | Supporting docs (primer mock) | Revising primer output |
 | `.claude/skills/review-tests/` | Vendored copy of the critique plugin's review-tests skill, run by the `review-tests` workflow as an advisory PR check; its `discover-files.sh` is shellcheck-linted in CI | Changing the CI test-quality review |

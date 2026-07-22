@@ -131,6 +131,12 @@ issues set <n> [--priority P0..P4] [--type bug|enhancement|task] [--add-area X]
            [--remove-area X] [--parent N | --no-parent] [--title "..."]
                                   # retriage/edit within conventions (swaps the old
                                   # priority/type label, never stacks a second one)
+issues pr [--for N] [--title "..."] [--what|--why|--testing "..."]
+          [--body-file F] [--base BRANCH] [--ready]
+                                  # the PR step of the workflow, composed rather than
+                                  # freeform: draft PR for the issue this branch is
+                                  # for, body from the What/Why/Testing template with
+                                  # exactly one "Fixes #n" (see below)
 issues close <n> --reason "..."   # comment + close (not-planned unless --completed
                                   # or --duplicate-of M)
 issues block <n> --on <m>         # add dependency (cycle-checked)
@@ -166,6 +172,50 @@ issues migrate beads              # import a beads (bd) database from .beads/iss
 
 Global flags: `--json` (structured output, stable schema), `--repo owner/name`
 (default: detect from git remote via go-gh).
+
+### `issues pr`
+
+The last step of the claim lifecycle, and the only one the tool used not to
+cover: `ready → start → branch → PR` was enforced up to the branch, then handed
+off to a freeform `gh pr create`. That gap costs twice — description format
+drifts, and a forgotten `Fixes #n` leaves the issue claimed-but-orphaned after
+the merge, needing a manual close. A repository PR template doesn't close it:
+agents pass `--body` directly, which bypasses templates entirely.
+
+`pr` is composition and guards, not a reimplementation of `gh pr`. Reviews,
+merges, checks and PR listing stay where they are.
+
+- **Which issue.** The claim is the primary signal — it's tracker state, not a
+  naming guess: exactly one open non-epic issue assigned to you is the answer.
+  A number in the branch name (`feat/30-pr-command`) breaks ties when several
+  are claimed and stands in when none is, but only as a whole `-`/`/`-delimited
+  segment, so `fix/http500-retries` doesn't link `#500`. Anything still
+  ambiguous is a usage error naming the candidates; `--for <n>` settles it. The
+  cost of guessing wrong is closing the wrong issue on merge, so guessing is
+  not on the menu.
+- **Exactly one `Fixes #n`.** The composed body always writes one, plus
+  `Part of #<epic>` when the issue is a sub-issue. A `--body-file` gets
+  whichever of those links it doesn't already make, so the escape hatch can't
+  quietly lose one — and never a second copy. A body already carrying a
+  closing keyword (`fixes`/`closes`/`resolves`, any case — GitHub acts on all
+  of them) is refused if it names a different issue, or several.
+- **Body template.** `### What / ### Why / ### Testing`, mirroring the issue
+  template and lives beside it in `internal/conventions`. What and Why default
+  to the issue's own `Fix`/`Approach` and `Problem`/`Goal` sections — the issue
+  already says this — so in the common case only `--testing` is worth typing.
+  Empty sections are omitted, never left as bare headers.
+- **Guards.** Draft by default (`--ready` opens for review). Refuses an
+  unpushed branch (GitHub can only open a PR for a ref it can see), the default
+  branch itself, a branch that already has an open PR (named, rather than
+  relayed as the API's 422), and an epic as the target. Warns — rather than
+  refuses — on a branch outside `feat/|fix/|chore/|docs/` and on an issue
+  claimed by someone else: the work is already committed by then, so refusing
+  would only strand it.
+
+Local branch state comes from `internal/git`, injected into the App as a
+function the way `--edit`'s editor is, so the command stays testable without a
+checkout. Two API calls beyond the issue read: one query for the default branch
+and any existing PR on the head, one REST create.
 
 ### `issues prime`
 
@@ -242,7 +292,9 @@ typical repo.
   - `internal/model/` — Issue/Epic domain types, ready/normalization/cycle logic
     (pure, unit-tested)
   - `internal/render/` — text + JSON renderers (golden-file tests)
-  - `internal/conventions/` — labels, body template, primer text (the opinions live here)
+  - `internal/conventions/` — labels, body and PR templates, primer text (the opinions
+    live here)
+  - `internal/git/` — local branch state for `pr` (current branch, has-upstream)
 - **Testing**: unit tests against a fake API layer; golden files for renderer output.
   An integration smoke test against a real scratch repo (behind a build tag, run
   manually — it needs a token and mutates state, so it stays out of CI) is deferred

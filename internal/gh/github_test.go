@@ -90,6 +90,11 @@ func newFakeServer(t *testing.T) *fakeServer {
 			key += "?" + r.URL.RawQuery
 		}
 		if resp, ok := f.rest[key]; ok {
+			// GitHub declares JSON on every REST response, and go-gh only
+			// parses an error body when it does — without this header a
+			// failure arrives as a bare status line, so a test asserting on
+			// the server's message would be testing the fake, not the client.
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(resp.status)
 			fmt.Fprint(w, resp.body)
 			return
@@ -575,5 +580,111 @@ func TestAuthErrorOn401(t *testing.T) {
 	}
 	if !strings.Contains(authErr.Error(), "gh auth login") {
 		t.Errorf("AuthError message: %v", authErr)
+	}
+}
+
+func TestPullRequestContext(t *testing.T) {
+	f := newFakeServer(t)
+	f.graphql["defaultBranchRef"] = `{"data":{"repository":{
+		"defaultBranchRef":{"name":"main"},
+		"pullRequests":{"nodes":[{"number":12,"url":"https://github.com/o/r/pull/12","isDraft":true}]}}}}`
+	got, err := f.client(t).PullRequestContext(context.Background(), "feat/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DefaultBranch != "main" {
+		t.Errorf("DefaultBranch = %q, want main", got.DefaultBranch)
+	}
+	if got.Existing == nil || got.Existing.Number != 12 || !got.Existing.Draft {
+		t.Errorf("Existing = %+v, want the open draft #12", got.Existing)
+	}
+	vars, _ := decodeBody(t, f.requests[0].Body)["variables"].(map[string]any)
+	if vars["head"] != "feat/x" {
+		t.Errorf("head filter = %v, want feat/x — an unfiltered query would return someone else's PR", vars["head"])
+	}
+}
+
+// A branch with no PR yet is the normal case, and an empty nodes list must
+// read as "none", not as a zero-valued PR the caller would refuse on.
+func TestPullRequestContextWithoutAnExistingPR(t *testing.T) {
+	f := newFakeServer(t)
+	f.graphql["defaultBranchRef"] = `{"data":{"repository":{
+		"defaultBranchRef":{"name":"trunk"},"pullRequests":{"nodes":[]}}}}`
+	got, err := f.client(t).PullRequestContext(context.Background(), "feat/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Existing != nil {
+		t.Errorf("Existing = %+v, want nil", got.Existing)
+	}
+	if got.DefaultBranch != "trunk" {
+		t.Errorf("DefaultBranch = %q, want trunk", got.DefaultBranch)
+	}
+}
+
+// An empty repository has no default branch; that is a nil ref, not a crash.
+func TestPullRequestContextWithoutADefaultBranch(t *testing.T) {
+	f := newFakeServer(t)
+	f.graphql["defaultBranchRef"] = `{"data":{"repository":{
+		"defaultBranchRef":null,"pullRequests":{"nodes":[]}}}}`
+	got, err := f.client(t).PullRequestContext(context.Background(), "feat/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DefaultBranch != "" {
+		t.Errorf("DefaultBranch = %q, want empty", got.DefaultBranch)
+	}
+}
+
+// The server's own words are what a caller reads, so assert them: a wrapper
+// that swallowed the response detail and returned a bare status would still
+// be non-nil, and useless.
+func TestPullRequestContextError(t *testing.T) {
+	f := newFakeServer(t)
+	f.graphql["defaultBranchRef"] = `{"errors":[{"message":"branch ref is invalid"}]}`
+	_, err := f.client(t).PullRequestContext(context.Background(), "feat/x")
+	if err == nil {
+		t.Fatal("PullRequestContext() succeeded on a GraphQL error")
+	}
+	if !strings.Contains(err.Error(), "branch ref is invalid") {
+		t.Errorf("err = %q, want it to carry the server's message", err)
+	}
+}
+
+func TestCreatePullRequest(t *testing.T) {
+	f := newFakeServer(t)
+	f.rest["POST /repos/o/r/pulls"] = restResponse{201,
+		`{"number":12,"html_url":"https://github.com/o/r/pull/12","draft":true}`}
+	pr, err := f.client(t).CreatePullRequest(context.Background(), NewPullRequest{
+		Title: "feat: x", Body: "Fixes #30", Head: "feat/x", Base: "main", Draft: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.Number != 12 || pr.URL != "https://github.com/o/r/pull/12" || !pr.Draft {
+		t.Errorf("CreatePullRequest() = %+v", pr)
+	}
+	got := decodeBody(t, f.requests[len(f.requests)-1].Body)
+	want := map[string]any{
+		"title": "feat: x", "body": "Fixes #30",
+		"head": "feat/x", "base": "main", "draft": true,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("request payload = %v, want %v", got, want)
+	}
+}
+
+// A 422 that slips past the proactive PullRequestContext check reaches the
+// user verbatim, so the message must survive the wrapper — not just the
+// fact that something failed.
+func TestCreatePullRequestError(t *testing.T) {
+	f := newFakeServer(t)
+	f.rest["POST /repos/o/r/pulls"] = restResponse{422, `{"message":"A pull request already exists"}`}
+	_, err := f.client(t).CreatePullRequest(context.Background(), NewPullRequest{Head: "feat/x", Base: "main"})
+	if err == nil {
+		t.Fatal("CreatePullRequest() succeeded on a 422")
+	}
+	if !strings.Contains(err.Error(), "A pull request already exists") {
+		t.Errorf("err = %q, want it to carry the server's message", err)
 	}
 }
