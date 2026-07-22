@@ -200,3 +200,25 @@ func TestPRTitle(t *testing.T) {
 		})
 	}
 }
+
+// PRTitle only derives three prefixes, but HasCommitPrefix must recognize
+// every one it knows: a "docs:" title on an enhancement issue would
+// otherwise be double-prefixed to "feat: docs: …", corrupting the very
+// squash-merge subject the convention protects. Looping the list keeps a
+// prefix from being added without its recognition being covered.
+func TestPRTitleLeavesEveryKnownPrefixAlone(t *testing.T) {
+	// Spelled out rather than ranged over CommitPrefixes: a loop over the
+	// list under test drops the case along with the entry, so removing a
+	// prefix would still pass. Pinning it also means adding a prefix fails
+	// here until it is covered.
+	want := []string{"feat", "fix", "chore", "docs", "refactor", "test", "perf", "build", "ci", "style", "revert"}
+	if !reflect.DeepEqual(CommitPrefixes, want) {
+		t.Fatalf("CommitPrefixes = %v, want %v", CommitPrefixes, want)
+	}
+	for _, prefix := range want {
+		title := prefix + ": already prefixed"
+		if got := PRTitle("enhancement", title); got != title {
+			t.Errorf("PRTitle(enhancement, %q) = %q, want it unchanged", title, got)
+		}
+	}
+}
