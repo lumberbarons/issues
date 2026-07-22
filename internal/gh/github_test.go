@@ -90,6 +90,11 @@ func newFakeServer(t *testing.T) *fakeServer {
 			key += "?" + r.URL.RawQuery
 		}
 		if resp, ok := f.rest[key]; ok {
+			// GitHub declares JSON on every REST response, and go-gh only
+			// parses an error body when it does — without this header a
+			// failure arrives as a bare status line, so a test asserting on
+			// the server's message would be testing the fake, not the client.
+			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(resp.status)
 			fmt.Fprint(w, resp.body)
 			return
@@ -631,11 +636,18 @@ func TestPullRequestContextWithoutADefaultBranch(t *testing.T) {
 	}
 }
 
+// The server's own words are what a caller reads, so assert them: a wrapper
+// that swallowed the response detail and returned a bare status would still
+// be non-nil, and useless.
 func TestPullRequestContextError(t *testing.T) {
 	f := newFakeServer(t)
-	f.graphql["defaultBranchRef"] = `{"errors":[{"message":"nope"}]}`
-	if _, err := f.client(t).PullRequestContext(context.Background(), "feat/x"); err == nil {
+	f.graphql["defaultBranchRef"] = `{"errors":[{"message":"branch ref is invalid"}]}`
+	_, err := f.client(t).PullRequestContext(context.Background(), "feat/x")
+	if err == nil {
 		t.Fatal("PullRequestContext() succeeded on a GraphQL error")
+	}
+	if !strings.Contains(err.Error(), "branch ref is invalid") {
+		t.Errorf("err = %q, want it to carry the server's message", err)
 	}
 }
 
@@ -662,10 +674,17 @@ func TestCreatePullRequest(t *testing.T) {
 	}
 }
 
+// A 422 that slips past the proactive PullRequestContext check reaches the
+// user verbatim, so the message must survive the wrapper — not just the
+// fact that something failed.
 func TestCreatePullRequestError(t *testing.T) {
 	f := newFakeServer(t)
 	f.rest["POST /repos/o/r/pulls"] = restResponse{422, `{"message":"A pull request already exists"}`}
-	if _, err := f.client(t).CreatePullRequest(context.Background(), NewPullRequest{Head: "feat/x", Base: "main"}); err == nil {
+	_, err := f.client(t).CreatePullRequest(context.Background(), NewPullRequest{Head: "feat/x", Base: "main"})
+	if err == nil {
 		t.Fatal("CreatePullRequest() succeeded on a 422")
+	}
+	if !strings.Contains(err.Error(), "A pull request already exists") {
+		t.Errorf("err = %q, want it to carry the server's message", err)
 	}
 }
