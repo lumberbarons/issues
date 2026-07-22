@@ -503,8 +503,15 @@ func TestPRPropagatesAPIFailures(t *testing.T) {
 			app, _, _ := newApp(f)
 			onBranch(app, "feat/x")
 
-			if err := app.PR(context.Background(), PROpts{Sections: sections("", "", "t")}); err == nil {
+			err := app.PR(context.Background(), PROpts{Sections: sections("", "", "t")})
+			if err == nil {
 				t.Fatalf("%s failure was swallowed", method)
+			}
+			// The cause must survive, not just the failure: an agent branches
+			// on what the message says, so wrapping it in a generic "could
+			// not open PR" would be a regression this must catch.
+			if !strings.Contains(err.Error(), "boom") {
+				t.Errorf("err = %q, want it to carry the %s failure", err, method)
 			}
 		})
 	}

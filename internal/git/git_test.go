@@ -72,12 +72,17 @@ func TestCurrentRejectsDetachedHead(t *testing.T) {
 	}
 }
 
+// An empty branch name is the other shape of "not on a branch", and earns
+// the same actionable message as a detached HEAD rather than a bare failure.
 func TestCurrentRejectsEmptyBranch(t *testing.T) {
 	_, err := current(fakeRunner(t, map[string]string{
 		"rev-parse --abbrev-ref HEAD": "",
 	}, nil))
 	if err == nil {
 		t.Fatal("current() succeeded outside a branch")
+	}
+	if !strings.Contains(err.Error(), "check out a branch first") {
+		t.Errorf("err = %q, want it to say what to do about it", err)
 	}
 }
 
